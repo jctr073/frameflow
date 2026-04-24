@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import ImageIO
 import QuickLookThumbnailing
 
 @MainActor
@@ -129,11 +130,50 @@ final class MediaLibrary: ObservableObject {
 }
 
 enum ThumbnailProvider {
+    private static let thumbnailSize = CGSize(width: 112, height: 80)
+
     static func thumbnail(for item: MediaItem) async -> NSImage {
-        let scale = NSScreen.main?.backingScaleFactor ?? 2
+        switch item.kind {
+        case .image, .gif, .webp:
+            return await rasterThumbnail(for: item.url)
+                ?? NSWorkspace.shared.icon(forFile: item.url.path)
+        case .video:
+            return await quickLookThumbnail(for: item.url)
+                ?? NSWorkspace.shared.icon(forFile: item.url.path)
+        }
+    }
+
+    private static func rasterThumbnail(for url: URL) async -> NSImage? {
+        await Task.detached(priority: .userInitiated) {
+            let sourceOptions: [CFString: Any] = [
+                kCGImageSourceShouldCache: false
+            ]
+            let thumbnailOptions: [CFString: Any] = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceShouldCacheImmediately: true,
+                kCGImageSourceThumbnailMaxPixelSize: max(thumbnailSize.width, thumbnailSize.height) * 2
+            ]
+
+            if let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions as CFDictionary),
+               let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions as CFDictionary) {
+                return NSImage(
+                    cgImage: cgImage,
+                    size: CGSize(width: cgImage.width, height: cgImage.height)
+                )
+            }
+
+            return NSImage(contentsOf: url)
+        }.value
+    }
+
+    private static func quickLookThumbnail(for url: URL) async -> NSImage? {
+        let scale = await MainActor.run {
+            NSScreen.main?.backingScaleFactor ?? 2
+        }
         let request = QLThumbnailGenerator.Request(
-            fileAt: item.url,
-            size: CGSize(width: 112, height: 80),
+            fileAt: url,
+            size: thumbnailSize,
             scale: scale,
             representationTypes: .thumbnail
         )
@@ -142,7 +182,7 @@ enum ThumbnailProvider {
             let representation = try await QLThumbnailGenerator.shared.generateBestRepresentation(for: request)
             return representation.nsImage
         } catch {
-            return NSWorkspace.shared.icon(forFile: item.url.path)
+            return nil
         }
     }
 }

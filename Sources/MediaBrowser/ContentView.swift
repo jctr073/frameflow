@@ -8,6 +8,9 @@ struct ContentView: View {
     @State private var zoomIndex = 3
     @State private var filterText = ""
     @State private var selectedStatus = MediaStatus(size: nil, duration: nil)
+    @State private var pinnedItems: [MediaItem] = []
+    @State private var pinnedThumbnails: [URL: NSImage] = [:]
+    @State private var activePanel: SidePanel = .thumbnail
 
     private let initialFolderURL: URL?
     private let zoomLevels = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0]
@@ -24,6 +27,11 @@ struct ContentView: View {
 
                 previewPanel
                     .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
+
+                if !pinnedItems.isEmpty {
+                    pinnedPanel
+                        .frame(minWidth: 132, idealWidth: 170, maxWidth: 260)
+                }
             }
 
             statusBar
@@ -52,6 +60,11 @@ struct ContentView: View {
         .onChange(of: library.items) {
             selectFirstVisibleItemIfNeeded()
         }
+        .onChange(of: pinnedItems) {
+            if pinnedItems.isEmpty, activePanel == .pinned {
+                activePanel = .thumbnail
+            }
+        }
     }
 
     private var thumbnailPanel: some View {
@@ -73,14 +86,80 @@ struct ContentView: View {
                             ThumbnailRow(item: item, thumbnail: library.thumbnails[item.url])
                                 .tag(item.id)
                                 .accessibilityLabel(item.fileName)
+                                .onTapGesture {
+                                    activePanel = .thumbnail
+                                    library.selectedID = item.id
+                                }
+                                .contextMenu {
+                                    Button(pinMenuTitle(for: item)) {
+                                        pin(item)
+                                    }
+                                }
                         }
                     }
                     .listStyle(.sidebar)
+                    .overlay(panelFocusOverlay(for: .thumbnail))
                     .onChange(of: library.selectedID) {
                         guard let selectedID = library.selectedID else { return }
                         withAnimation(.snappy(duration: 0.16)) {
                             proxy.scrollTo(selectedID, anchor: .center)
                         }
+                    }
+                }
+            }
+        }
+        .background(Color(nsColor: .controlBackgroundColor))
+    }
+
+    private var pinnedPanel: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Text("Pinned")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                Text("\(pinnedItems.count)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(.bar)
+            .overlay(alignment: .bottom) {
+                Divider()
+            }
+
+            ScrollViewReader { proxy in
+                List(selection: $library.selectedID) {
+                    ForEach(pinnedItems) { item in
+                        ThumbnailRow(item: item, thumbnail: pinnedThumbnail(for: item))
+                            .tag(item.id)
+                            .accessibilityLabel(item.fileName)
+                            .onTapGesture {
+                                activePanel = .pinned
+                                library.selectedID = item.id
+                            }
+                            .contextMenu {
+                                Button("Remove from Pinned") {
+                                    unpin(item)
+                                }
+                            }
+                            .task(id: item.id) {
+                                await loadPinnedThumbnailIfNeeded(for: item)
+                            }
+                    }
+                }
+                .listStyle(.sidebar)
+                .overlay(panelFocusOverlay(for: .pinned))
+                .onChange(of: library.selectedID) {
+                    guard activePanel == .pinned,
+                          let selectedID = library.selectedID,
+                          pinnedItems.contains(where: { $0.id == selectedID })
+                    else {
+                        return
+                    }
+                    withAnimation(.snappy(duration: 0.16)) {
+                        proxy.scrollTo(selectedID, anchor: .center)
                     }
                 }
             }
@@ -241,11 +320,17 @@ struct ContentView: View {
         return library.stateMessage
     }
 
+    private var selectedItem: MediaItem? {
+        guard let selectedID = library.selectedID else { return nil }
+        return library.items.first { $0.id == selectedID }
+            ?? pinnedItems.first { $0.id == selectedID }
+    }
+
     private var previewPanel: some View {
         ZStack {
             Color(nsColor: .underPageBackgroundColor)
 
-            if let item = library.selectedItem {
+            if let item = selectedItem {
                 PreviewPane(item: item, zoomMultiplier: zoomLevels[zoomIndex])
                     .id(item.id)
             } else {
@@ -254,6 +339,14 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .padding()
+            }
+        }
+        .contentShape(Rectangle())
+        .contextMenu {
+            if let item = selectedItem {
+                Button(pinMenuTitle(for: item)) {
+                    pin(item)
+                }
             }
         }
     }
@@ -325,10 +418,16 @@ struct ContentView: View {
 
         switch event.keyCode {
         case 126:
-            selectPreviousVisibleItem()
+            selectPreviousItemInActivePanel()
             return true
         case 125:
-            selectNextVisibleItem()
+            selectNextItemInActivePanel()
+            return true
+        case 123:
+            moveToPreviousPanel()
+            return true
+        case 124:
+            moveToNextPanel()
             return true
         default:
             return false
@@ -345,31 +444,114 @@ struct ContentView: View {
 
     private func selectFirstVisibleItemIfNeeded() {
         if let selectedID = library.selectedID,
-           visibleItems.contains(where: { $0.id == selectedID }) {
+           visibleItems.contains(where: { $0.id == selectedID })
+            || pinnedItems.contains(where: { $0.id == selectedID }) {
             return
         }
 
         library.selectedID = visibleItems.first?.id
     }
 
-    private func selectPreviousVisibleItem() {
+    private func selectPreviousItemInActivePanel() {
+        let items = navigableItems
         guard let selectedID = library.selectedID,
-              let index = visibleItems.firstIndex(where: { $0.id == selectedID }),
+              let index = items.firstIndex(where: { $0.id == selectedID }),
               index > 0
         else {
             return
         }
-        library.selectedID = visibleItems[index - 1].id
+        library.selectedID = items[index - 1].id
     }
 
-    private func selectNextVisibleItem() {
+    private func selectNextItemInActivePanel() {
+        let items = navigableItems
         guard let selectedID = library.selectedID,
-              let index = visibleItems.firstIndex(where: { $0.id == selectedID }),
-              index < visibleItems.index(before: visibleItems.endIndex)
+              let index = items.firstIndex(where: { $0.id == selectedID }),
+              index < items.index(before: items.endIndex)
         else {
             return
         }
-        library.selectedID = visibleItems[index + 1].id
+        library.selectedID = items[index + 1].id
+    }
+
+    private var navigableItems: [MediaItem] {
+        switch activePanel {
+        case .thumbnail:
+            return visibleItems
+        case .pinned:
+            return pinnedItems
+        }
+    }
+
+    private func moveToPreviousPanel() {
+        guard activePanel == .pinned else { return }
+        activePanel = .thumbnail
+        if let selectedID = library.selectedID,
+           visibleItems.contains(where: { $0.id == selectedID }) {
+            return
+        }
+        library.selectedID = visibleItems.first?.id
+    }
+
+    private func moveToNextPanel() {
+        guard activePanel == .thumbnail, !pinnedItems.isEmpty else { return }
+        activePanel = .pinned
+        if let selectedID = library.selectedID,
+           pinnedItems.contains(where: { $0.id == selectedID }) {
+            return
+        }
+        library.selectedID = pinnedItems.first?.id
+    }
+
+    private func pin(_ item: MediaItem) {
+        guard !pinnedItems.contains(where: { $0.id == item.id }) else { return }
+        pinnedItems.append(item)
+        if let thumbnail = library.thumbnails[item.url] {
+            pinnedThumbnails[item.url] = thumbnail
+        }
+    }
+
+    private func unpin(_ item: MediaItem) {
+        pinnedItems.removeAll { $0.id == item.id }
+        pinnedThumbnails[item.url] = nil
+        if library.selectedID == item.id {
+            if activePanel == .pinned {
+                library.selectedID = pinnedItems.first?.id ?? visibleItems.first?.id
+            } else if !visibleItems.contains(where: { $0.id == item.id }) {
+                library.selectedID = visibleItems.first?.id
+            }
+        }
+    }
+
+    private func pinMenuTitle(for item: MediaItem) -> String {
+        pinnedItems.contains(where: { $0.id == item.id }) ? "Pinned" : "Pin File"
+    }
+
+    private func pinnedThumbnail(for item: MediaItem) -> NSImage? {
+        pinnedThumbnails[item.url] ?? library.thumbnails[item.url]
+    }
+
+    @MainActor
+    private func loadPinnedThumbnailIfNeeded(for item: MediaItem) async {
+        if pinnedThumbnails[item.url] != nil {
+            return
+        }
+        if let thumbnail = library.thumbnails[item.url] {
+            pinnedThumbnails[item.url] = thumbnail
+            return
+        }
+
+        pinnedThumbnails[item.url] = await ThumbnailProvider.thumbnail(for: item)
+    }
+
+    @ViewBuilder
+    private func panelFocusOverlay(for panel: SidePanel) -> some View {
+        if activePanel == panel {
+            RoundedRectangle(cornerRadius: 5)
+                .stroke(Color.accentColor.opacity(0.55), lineWidth: 1)
+                .padding(3)
+                .allowsHitTesting(false)
+        }
     }
 
     private func openTerminalAtCurrentFolder() {
@@ -413,13 +595,18 @@ struct ContentView: View {
     }
 
     private func loadSelectedStatus() async {
-        guard let item = library.selectedItem else {
+        guard let item = selectedItem else {
             selectedStatus = MediaStatus(size: nil, duration: nil)
             return
         }
 
         selectedStatus = await MediaMetadata.status(for: item)
     }
+}
+
+private enum SidePanel {
+    case thumbnail
+    case pinned
 }
 
 private extension String {
