@@ -14,6 +14,7 @@ struct ContentView: View {
 
     private let initialFolderURL: URL?
     private let zoomLevels = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0]
+    private let sidePanelRowInsets = EdgeInsets(top: 8, leading: 18, bottom: 8, trailing: 18)
 
     init(initialFolderURL: URL?) {
         self.initialFolderURL = initialFolderURL
@@ -30,7 +31,7 @@ struct ContentView: View {
 
                 if !pinnedItems.isEmpty {
                     pinnedPanel
-                        .frame(minWidth: 132, idealWidth: 170, maxWidth: 260)
+                        .frame(minWidth: 170, idealWidth: 230, maxWidth: 280)
                 }
             }
 
@@ -84,6 +85,7 @@ struct ContentView: View {
                     List(selection: $library.selectedID) {
                         ForEach(visibleItems) { item in
                             ThumbnailRow(item: item, thumbnail: library.thumbnails[item.url])
+                                .listRowInsets(sidePanelRowInsets)
                                 .tag(item.id)
                                 .accessibilityLabel(item.fileName)
                                 .onTapGesture {
@@ -133,6 +135,7 @@ struct ContentView: View {
                 List(selection: $library.selectedID) {
                     ForEach(pinnedItems) { item in
                         ThumbnailRow(item: item, thumbnail: pinnedThumbnail(for: item))
+                            .listRowInsets(sidePanelRowInsets)
                             .tag(item.id)
                             .accessibilityLabel(item.fileName)
                             .onTapGesture {
@@ -169,12 +172,6 @@ struct ContentView: View {
 
     private var folderHeader: some View {
         HStack(spacing: 8) {
-            Text(library.folderURL?.lastPathComponent ?? "No Folder")
-                .font(.headline)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
             Button {
                 chooseFolder()
             } label: {
@@ -186,6 +183,12 @@ struct ContentView: View {
             .keyboardShortcut("o", modifiers: .command)
             .help("Open Folder")
             .accessibilityLabel("Open Folder")
+
+            Text(library.folderURL?.lastPathComponent ?? "No Folder")
+                .font(.headline)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.leading, 10)
         .padding(.trailing, 8)
