@@ -12,6 +12,7 @@ struct ContentView: View {
     @State private var pinnedThumbnails: [URL: NSImage] = [:]
     @State private var activePanel: SidePanel = .thumbnail
     @State private var thumbnailSelectionID: URL?
+    @State private var isCopyingPinnedFiles = false
 
     private let initialFolderURL: URL?
     private let zoomLevels = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0]
@@ -143,6 +144,22 @@ struct ContentView: View {
                 Text("Pinned")
                     .font(.headline)
                     .frame(maxWidth: .infinity, alignment: .leading)
+
+                if isCopyingPinnedFiles {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Button {
+                        copyPinnedFilesToFolder()
+                    } label: {
+                        Image(systemName: "folder.badge.plus")
+                            .font(.system(size: 15, weight: .medium))
+                            .frame(width: 24, height: 24)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Copy Pinned Files")
+                    .accessibilityLabel("Copy Pinned Files")
+                }
 
                 Text("\(pinnedItems.count)")
                     .font(.caption)
@@ -600,6 +617,76 @@ struct ContentView: View {
         pinnedThumbnails[item.url] ?? library.thumbnails[item.url]
     }
 
+    private func copyPinnedFilesToFolder() {
+        guard !pinnedItems.isEmpty, !isCopyingPinnedFiles else { return }
+
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Copy"
+        panel.message = "Choose or create a folder for the pinned file copies."
+        panel.directoryURL = library.folderURL
+
+        guard panel.runModal() == .OK, let destinationURL = panel.url else {
+            return
+        }
+
+        let itemsToCopy = pinnedItems
+        isCopyingPinnedFiles = true
+        Task {
+            let result = await copyPinnedItems(itemsToCopy, to: destinationURL)
+            isCopyingPinnedFiles = false
+            showPinnedCopyResult(result, destinationURL: destinationURL)
+        }
+    }
+
+    private func copyPinnedItems(_ items: [MediaItem], to destinationURL: URL) async -> PinnedCopyResult {
+        await Task.detached(priority: .userInitiated) {
+            let fileManager = FileManager.default
+            var copiedCount = 0
+            var failures: [String] = []
+            var reservedNames = Set<String>()
+
+            for item in items {
+                do {
+                    let copyURL = uniqueCopyURL(for: item.url, in: destinationURL, reservedNames: &reservedNames)
+                    try fileManager.copyItem(at: item.url, to: copyURL)
+                    copiedCount += 1
+                } catch {
+                    failures.append("\(item.fileName): \(error.localizedDescription)")
+                }
+            }
+
+            return PinnedCopyResult(copiedCount: copiedCount, failures: failures)
+        }.value
+    }
+
+    private func showPinnedCopyResult(_ result: PinnedCopyResult, destinationURL: URL) {
+        let alert = NSAlert()
+        alert.alertStyle = result.failures.isEmpty ? .informational : .warning
+        alert.messageText = result.failures.isEmpty ? "Pinned Files Copied" : "Some Pinned Files Could Not Be Copied"
+        alert.informativeText = pinnedCopyInformativeText(for: result, destinationURL: destinationURL)
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
+    private func pinnedCopyInformativeText(for result: PinnedCopyResult, destinationURL: URL) -> String {
+        let noun = result.copiedCount == 1 ? "file" : "files"
+        var text = "Copied \(result.copiedCount) \(noun) to \(destinationURL.path)."
+
+        if !result.failures.isEmpty {
+            let shownFailures = result.failures.prefix(5).joined(separator: "\n")
+            text += "\n\n\(shownFailures)"
+            if result.failures.count > 5 {
+                text += "\n…and \(result.failures.count - 5) more."
+            }
+        }
+
+        return text
+    }
+
     @MainActor
     private func loadPinnedThumbnailIfNeeded(for item: MediaItem) async {
         if pinnedThumbnails[item.url] != nil {
@@ -676,6 +763,38 @@ struct ContentView: View {
 private enum SidePanel {
     case thumbnail
     case pinned
+}
+
+private struct PinnedCopyResult: Sendable {
+    let copiedCount: Int
+    let failures: [String]
+}
+
+private func uniqueCopyURL(for sourceURL: URL, in destinationURL: URL, reservedNames: inout Set<String>) -> URL {
+    let fileManager = FileManager.default
+    let baseName = sourceURL.deletingPathExtension().lastPathComponent
+    let pathExtension = sourceURL.pathExtension
+    var index = 1
+
+    while true {
+        let fileName: String
+        if index == 1 {
+            fileName = sourceURL.lastPathComponent
+        } else if pathExtension.isEmpty {
+            fileName = "\(baseName) \(index)"
+        } else {
+            fileName = "\(baseName) \(index).\(pathExtension)"
+        }
+
+        let candidateURL = destinationURL.appendingPathComponent(fileName)
+        if !reservedNames.contains(fileName),
+           !fileManager.fileExists(atPath: candidateURL.path) {
+            reservedNames.insert(fileName)
+            return candidateURL
+        }
+
+        index += 1
+    }
 }
 
 private extension String {
