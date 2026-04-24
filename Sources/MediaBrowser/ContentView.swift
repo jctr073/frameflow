@@ -11,6 +11,7 @@ struct ContentView: View {
     @State private var pinnedItems: [MediaItem] = []
     @State private var pinnedThumbnails: [URL: NSImage] = [:]
     @State private var activePanel: SidePanel = .thumbnail
+    @State private var thumbnailSelectionID: URL?
 
     private let initialFolderURL: URL?
     private let zoomLevels = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0]
@@ -51,6 +52,11 @@ struct ContentView: View {
         }
         .onChange(of: library.selectedID) {
             zoomIndex = 3
+            if activePanel == .thumbnail,
+               let selectedID = library.selectedID,
+               visibleThumbnailEntries.contains(where: { $0.id == selectedID }) {
+                thumbnailSelectionID = selectedID
+            }
         }
         .task(id: library.selectedID) {
             await loadSelectedStatus()
@@ -58,7 +64,7 @@ struct ContentView: View {
         .onChange(of: filterText) {
             selectFirstVisibleItemIfNeeded()
         }
-        .onChange(of: library.items) {
+        .onChange(of: library.thumbnailEntries) {
             selectFirstVisibleItemIfNeeded()
         }
         .onChange(of: pinnedItems) {
@@ -73,7 +79,7 @@ struct ContentView: View {
             folderHeader
             filterControl
 
-            if visibleItems.isEmpty {
+            if visibleThumbnailEntries.isEmpty {
                 Text(thumbnailEmptyMessage)
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -82,29 +88,47 @@ struct ContentView: View {
                     .padding()
             } else {
                 ScrollViewReader { proxy in
-                    List(selection: $library.selectedID) {
-                        ForEach(visibleItems) { item in
-                            ThumbnailRow(item: item, thumbnail: library.thumbnails[item.url])
+                    List(selection: $thumbnailSelectionID) {
+                        ForEach(visibleThumbnailEntries) { entry in
+                            switch entry {
+                            case .folder(let folderEntry):
+                                FolderRow(entry: folderEntry)
+                                    .listRowInsets(sidePanelRowInsets)
+                                    .tag(entry.id)
+                                    .accessibilityLabel(folderEntry.folder.name)
+                                    .onTapGesture {
+                                        activePanel = .thumbnail
+                                        thumbnailSelectionID = entry.id
+                                        library.toggleFolder(folderEntry.folder)
+                                    }
+                            case .item(let itemEntry):
+                                ThumbnailRow(
+                                    item: itemEntry.item,
+                                    thumbnail: library.thumbnails[itemEntry.item.url],
+                                    depth: itemEntry.depth
+                                )
                                 .listRowInsets(sidePanelRowInsets)
-                                .tag(item.id)
-                                .accessibilityLabel(item.fileName)
+                                .tag(entry.id)
+                                .accessibilityLabel(itemEntry.item.fileName)
                                 .onTapGesture {
                                     activePanel = .thumbnail
-                                    library.selectedID = item.id
+                                    thumbnailSelectionID = entry.id
+                                    library.selectedID = itemEntry.item.id
                                 }
                                 .contextMenu {
-                                    Button(pinMenuTitle(for: item)) {
-                                        pin(item)
+                                    Button(pinMenuTitle(for: itemEntry.item)) {
+                                        pin(itemEntry.item)
                                     }
                                 }
+                            }
                         }
                     }
                     .listStyle(.sidebar)
                     .overlay(panelFocusOverlay(for: .thumbnail))
-                    .onChange(of: library.selectedID) {
-                        guard let selectedID = library.selectedID else { return }
+                    .onChange(of: thumbnailSelectionID) {
+                        guard let thumbnailSelectionID else { return }
                         withAnimation(.snappy(duration: 0.16)) {
-                            proxy.scrollTo(selectedID, anchor: .center)
+                            proxy.scrollTo(thumbnailSelectionID, anchor: .center)
                         }
                     }
                 }
@@ -303,19 +327,23 @@ struct ContentView: View {
         return "\(visibleCount) of \(count) \(noun)"
     }
 
-    private var visibleItems: [MediaItem] {
+    private var visibleThumbnailEntries: [ThumbnailPanelEntry] {
         let pattern = filterText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !pattern.isEmpty else {
-            return library.items
+            return library.thumbnailEntries
         }
 
-        return library.items.filter { item in
-            item.fileName.matchesFileFilter(pattern)
+        return library.thumbnailEntries.filter { entry in
+            entry.displayName.matchesFileFilter(pattern)
         }
     }
 
+    private var visibleItems: [MediaItem] {
+        visibleThumbnailEntries.compactMap(\.item)
+    }
+
     private var thumbnailEmptyMessage: String {
-        if !library.items.isEmpty,
+        if !library.thumbnailEntries.isEmpty,
            !filterText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return "No files match this filter."
         }
@@ -325,7 +353,7 @@ struct ContentView: View {
 
     private var selectedItem: MediaItem? {
         guard let selectedID = library.selectedID else { return nil }
-        return library.items.first { $0.id == selectedID }
+        return library.item(withID: selectedID)
             ?? pinnedItems.first { $0.id == selectedID }
     }
 
@@ -449,40 +477,74 @@ struct ContentView: View {
         if let selectedID = library.selectedID,
            visibleItems.contains(where: { $0.id == selectedID })
             || pinnedItems.contains(where: { $0.id == selectedID }) {
+            if activePanel == .thumbnail {
+                thumbnailSelectionID = selectedID
+            }
             return
         }
 
+        if let currentSelection = thumbnailSelectionID,
+           visibleThumbnailEntries.contains(where: { $0.id == currentSelection }) {
+            return
+        }
+
+        thumbnailSelectionID = visibleThumbnailEntries.first?.id
         library.selectedID = visibleItems.first?.id
     }
 
     private func selectPreviousItemInActivePanel() {
-        let items = navigableItems
-        guard let selectedID = library.selectedID,
-              let index = items.firstIndex(where: { $0.id == selectedID }),
-              index > 0
-        else {
-            return
+        switch activePanel {
+        case .thumbnail:
+            moveThumbnailSelection(by: -1)
+        case .pinned:
+            movePinnedSelection(by: -1)
         }
-        library.selectedID = items[index - 1].id
     }
 
     private func selectNextItemInActivePanel() {
-        let items = navigableItems
-        guard let selectedID = library.selectedID,
-              let index = items.firstIndex(where: { $0.id == selectedID }),
-              index < items.index(before: items.endIndex)
-        else {
-            return
-        }
-        library.selectedID = items[index + 1].id
-    }
-
-    private var navigableItems: [MediaItem] {
         switch activePanel {
         case .thumbnail:
-            return visibleItems
+            moveThumbnailSelection(by: 1)
         case .pinned:
-            return pinnedItems
+            movePinnedSelection(by: 1)
+        }
+    }
+
+    private func moveThumbnailSelection(by offset: Int) {
+        let entries = visibleThumbnailEntries
+        guard !entries.isEmpty else {
+            return
+        }
+
+        let currentIndex = thumbnailSelectionID.flatMap { selectionID in
+            entries.firstIndex { $0.id == selectionID }
+        } ?? (offset > 0 ? -1 : entries.count)
+        let nextIndex = min(max(currentIndex + offset, entries.startIndex), entries.index(before: entries.endIndex))
+        activateThumbnailEntry(entries[nextIndex])
+    }
+
+    private func movePinnedSelection(by offset: Int) {
+        let items = pinnedItems
+        guard !items.isEmpty else {
+            return
+        }
+
+        let currentIndex = library.selectedID.flatMap { selectedID in
+            items.firstIndex { $0.id == selectedID }
+        } ?? (offset > 0 ? -1 : items.count)
+        let nextIndex = min(max(currentIndex + offset, items.startIndex), items.index(before: items.endIndex))
+        library.selectedID = items[nextIndex].id
+    }
+
+    private func activateThumbnailEntry(_ entry: ThumbnailPanelEntry) {
+        activePanel = .thumbnail
+        thumbnailSelectionID = entry.id
+
+        switch entry {
+        case .folder(let folderEntry):
+            library.expandFolder(folderEntry.folder)
+        case .item(let itemEntry):
+            library.selectedID = itemEntry.item.id
         }
     }
 
@@ -490,10 +552,14 @@ struct ContentView: View {
         guard activePanel == .pinned else { return }
         activePanel = .thumbnail
         if let selectedID = library.selectedID,
-           visibleItems.contains(where: { $0.id == selectedID }) {
+           visibleThumbnailEntries.contains(where: { $0.id == selectedID }) {
+            thumbnailSelectionID = selectedID
             return
         }
-        library.selectedID = visibleItems.first?.id
+
+        if let firstEntry = visibleThumbnailEntries.first {
+            activateThumbnailEntry(firstEntry)
+        }
     }
 
     private func moveToNextPanel() {
@@ -641,6 +707,7 @@ private extension String {
 struct ThumbnailRow: View {
     let item: MediaItem
     let thumbnail: NSImage?
+    var depth = 0
 
     var body: some View {
         VStack(spacing: 6) {
@@ -679,7 +746,41 @@ struct ThumbnailRow: View {
                 .frame(width: 116)
         }
         .frame(maxWidth: .infinity)
+        .padding(.leading, CGFloat(depth) * 18)
         .padding(.vertical, 6)
+    }
+}
+
+struct FolderRow: View {
+    let entry: FolderPanelEntry
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Image(systemName: entry.isExpanded ? "chevron.down" : "chevron.right")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 12)
+
+            Image(systemName: entry.isExpanded ? "folder.fill" : "folder")
+                .font(.system(size: 20, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 24)
+
+            Text(entry.folder.name)
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            Spacer(minLength: 4)
+
+            if entry.isLoading {
+                ProgressView()
+                    .controlSize(.small)
+            }
+        }
+        .padding(.leading, CGFloat(entry.depth) * 18)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

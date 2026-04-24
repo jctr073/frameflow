@@ -6,18 +6,30 @@ import QuickLookThumbnailing
 @MainActor
 final class MediaLibrary: ObservableObject {
     @Published private(set) var folderURL: URL?
-    @Published private(set) var items: [MediaItem] = []
     @Published var selectedID: MediaItem.ID?
     @Published private(set) var thumbnails: [URL: NSImage] = [:]
     @Published private(set) var isLoading = false
     @Published private(set) var loadError: String?
+    @Published private(set) var rootContent = FolderContents()
+    @Published private(set) var folderContents: [URL: FolderContents] = [:]
+    @Published private(set) var expandedFolderURLs: Set<URL> = []
+    @Published private(set) var loadingFolderURLs: Set<URL> = []
 
     private var loadTask: Task<Void, Never>?
+    private var folderLoadTasks: [URL: Task<Void, Never>] = [:]
     private var thumbnailTasks: [URL: Task<Void, Never>] = [:]
+
+    var items: [MediaItem] {
+        thumbnailEntries.compactMap(\.item)
+    }
+
+    var thumbnailEntries: [ThumbnailPanelEntry] {
+        entries(in: rootContent, depth: 0)
+    }
 
     var selectedItem: MediaItem? {
         guard let selectedID else { return nil }
-        return items.first { $0.id == selectedID }
+        return item(withID: selectedID)
     }
 
     var stateMessage: String {
@@ -30,11 +42,14 @@ final class MediaLibrary: ObservableObject {
         if folderURL == nil {
             return "Open a folder to browse media."
         }
-        return "No supported media files found in this folder."
+        return "No supported media files or subfolders found in this folder."
     }
 
     deinit {
         loadTask?.cancel()
+        for task in folderLoadTasks.values {
+            task.cancel()
+        }
         for task in thumbnailTasks.values {
             task.cancel()
         }
@@ -42,13 +57,20 @@ final class MediaLibrary: ObservableObject {
 
     func openFolder(_ url: URL) {
         loadTask?.cancel()
+        for task in folderLoadTasks.values {
+            task.cancel()
+        }
         for task in thumbnailTasks.values {
             task.cancel()
         }
+        folderLoadTasks.removeAll()
         thumbnailTasks.removeAll()
 
         folderURL = url
-        items = []
+        rootContent = FolderContents()
+        folderContents = [:]
+        expandedFolderURLs = []
+        loadingFolderURLs = []
         selectedID = nil
         thumbnails = [:]
         isLoading = true
@@ -58,17 +80,47 @@ final class MediaLibrary: ObservableObject {
             do {
                 let discovered = try await Self.scanFolder(url)
                 guard !Task.isCancelled else { return }
-                items = discovered
-                selectedID = discovered.first?.id
+                rootContent = discovered
+                selectedID = discovered.items.first?.id
                 isLoading = false
-                startThumbnailGeneration(for: discovered)
+                startThumbnailGeneration(for: discovered.items)
             } catch {
                 guard !Task.isCancelled else { return }
-                items = []
+                rootContent = FolderContents()
+                folderContents = [:]
+                expandedFolderURLs = []
+                loadingFolderURLs = []
                 selectedID = nil
                 isLoading = false
                 loadError = "This folder could not be loaded."
             }
+        }
+    }
+
+    func item(withID id: MediaItem.ID) -> MediaItem? {
+        if let item = rootContent.items.first(where: { $0.id == id }) {
+            return item
+        }
+
+        for contents in folderContents.values {
+            if let item = contents.items.first(where: { $0.id == id }) {
+                return item
+            }
+        }
+
+        return nil
+    }
+
+    func expandFolder(_ folder: MediaFolder) {
+        expandedFolderURLs.insert(folder.url)
+        loadFolderIfNeeded(folder)
+    }
+
+    func toggleFolder(_ folder: MediaFolder) {
+        if expandedFolderURLs.contains(folder.url) {
+            expandedFolderURLs.remove(folder.url)
+        } else {
+            expandFolder(folder)
         }
     }
 
@@ -92,39 +144,170 @@ final class MediaLibrary: ObservableObject {
         self.selectedID = items[index + 1].id
     }
 
-    private static func scanFolder(_ url: URL) async throws -> [MediaItem] {
+    private static func scanFolder(_ url: URL) async throws -> FolderContents {
         try await Task.detached(priority: .userInitiated) {
-            let resourceKeys: Set<URLResourceKey> = [.isRegularFileKey, .isHiddenKey]
+            let resourceKeys: Set<URLResourceKey> = [.isDirectoryKey, .isHiddenKey, .isPackageKey, .isRegularFileKey]
             let urls = try FileManager.default.contentsOfDirectory(
                 at: url,
                 includingPropertiesForKeys: Array(resourceKeys),
                 options: [.skipsPackageDescendants]
             )
 
-            return urls.compactMap { fileURL -> MediaItem? in
+            var folders: [MediaFolder] = []
+            var items: [MediaItem] = []
+
+            for fileURL in urls {
                 guard let values = try? fileURL.resourceValues(forKeys: resourceKeys),
-                      values.isRegularFile == true,
-                      values.isHidden != true,
-                      let kind = MediaItem.kind(for: fileURL)
+                      values.isHidden != true
                 else {
-                    return nil
+                    continue
                 }
-                return MediaItem(id: fileURL, url: fileURL, kind: kind)
+
+                if values.isDirectory == true, values.isPackage != true {
+                    folders.append(MediaFolder(id: fileURL, url: fileURL))
+                    continue
+                }
+
+                if values.isRegularFile == true,
+                   let kind = MediaItem.kind(for: fileURL) {
+                    items.append(MediaItem(id: fileURL, url: fileURL, kind: kind))
+                }
             }
-            .sorted {
-                $0.fileName.localizedStandardCompare($1.fileName) == .orderedAscending
-            }
+
+            return FolderContents(
+                folders: folders.sorted {
+                    $0.name.localizedStandardCompare($1.name) == .orderedAscending
+                },
+                items: items.sorted {
+                    $0.fileName.localizedStandardCompare($1.fileName) == .orderedAscending
+                }
+            )
         }.value
+    }
+
+    private func loadFolderIfNeeded(_ folder: MediaFolder) {
+        guard folderContents[folder.url] == nil,
+              folderLoadTasks[folder.url] == nil
+        else {
+            return
+        }
+
+        loadingFolderURLs.insert(folder.url)
+        folderLoadTasks[folder.url] = Task {
+            do {
+                let contents = try await Self.scanFolder(folder.url)
+                guard !Task.isCancelled else { return }
+                folderContents[folder.url] = contents
+                loadingFolderURLs.remove(folder.url)
+                folderLoadTasks[folder.url] = nil
+                startThumbnailGeneration(for: contents.items)
+            } catch {
+                guard !Task.isCancelled else { return }
+                folderContents[folder.url] = FolderContents()
+                loadingFolderURLs.remove(folder.url)
+                folderLoadTasks[folder.url] = nil
+            }
+        }
     }
 
     private func startThumbnailGeneration(for items: [MediaItem]) {
         for item in items {
+            guard thumbnails[item.url] == nil,
+                  thumbnailTasks[item.url] == nil
+            else {
+                continue
+            }
+
             let task = Task {
                 let image = await ThumbnailProvider.thumbnail(for: item)
                 guard !Task.isCancelled else { return }
                 thumbnails[item.url] = image
+                thumbnailTasks[item.url] = nil
             }
             thumbnailTasks[item.url] = task
+        }
+    }
+
+    private func entries(in content: FolderContents, depth: Int) -> [ThumbnailPanelEntry] {
+        var entries: [ThumbnailPanelEntry] = []
+
+        for folder in content.folders {
+            let isExpanded = expandedFolderURLs.contains(folder.url)
+            entries.append(.folder(
+                FolderPanelEntry(
+                    folder: folder,
+                    depth: depth,
+                    isExpanded: isExpanded,
+                    isLoading: loadingFolderURLs.contains(folder.url)
+                )
+            ))
+
+            if isExpanded, let childContent = folderContents[folder.url] {
+                entries.append(contentsOf: self.entries(in: childContent, depth: depth + 1))
+            }
+        }
+
+        entries.append(contentsOf: content.items.map { .item(ItemPanelEntry(item: $0, depth: depth)) })
+        return entries
+    }
+}
+
+struct FolderContents: Hashable, Sendable {
+    var folders: [MediaFolder] = []
+    var items: [MediaItem] = []
+}
+
+struct MediaFolder: Identifiable, Hashable, Sendable {
+    let id: URL
+    let url: URL
+
+    var name: String {
+        url.lastPathComponent
+    }
+}
+
+struct FolderPanelEntry: Identifiable, Hashable {
+    var id: URL { folder.id }
+    let folder: MediaFolder
+    let depth: Int
+    let isExpanded: Bool
+    let isLoading: Bool
+}
+
+struct ItemPanelEntry: Identifiable, Hashable {
+    var id: URL { item.id }
+    let item: MediaItem
+    let depth: Int
+}
+
+enum ThumbnailPanelEntry: Identifiable, Hashable {
+    case folder(FolderPanelEntry)
+    case item(ItemPanelEntry)
+
+    var id: URL {
+        switch self {
+        case .folder(let entry):
+            entry.id
+        case .item(let entry):
+            entry.id
+        }
+    }
+
+    var item: MediaItem? {
+        switch self {
+        case .folder:
+            nil
+        case .item(let entry):
+            entry.item
+        }
+    }
+
+    var displayName: String {
+        switch self {
+        case .folder(let entry):
+            entry.folder.name
+        case .item(let entry):
+            entry.item.fileName
         }
     }
 }
