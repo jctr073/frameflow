@@ -172,171 +172,391 @@ struct NativeWebImageView: NSViewRepresentable {
     }
 }
 
-struct NativeVideoView: NSViewRepresentable {
+struct NativeVideoView: View {
     let url: URL
     var crop = NormalizedCrop.full
     var displaySize: CGSize?
     var trim: MediaTrim?
+    var onTimeChange: (TimeInterval) -> Void = { _ in }
+
+    @StateObject private var controller = NativeVideoController()
+
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            NativeVideoSurface(player: controller.player)
+
+            NativeVideoControls(controller: controller)
+                .padding(.horizontal, 14)
+                .padding(.bottom, 12)
+        }
+        .onAppear(perform: loadVideo)
+        .onDisappear {
+            controller.stop()
+        }
+        .onChange(of: url) {
+            loadVideo()
+        }
+        .onChange(of: crop) {
+            loadVideo()
+        }
+        .onChange(of: displaySize) {
+            loadVideo()
+        }
+        .onChange(of: trim) {
+            loadVideo()
+        }
+        .onChange(of: controller.currentTime) {
+            onTimeChange(controller.currentTime)
+        }
+    }
+
+    private func loadVideo() {
+        controller.play(url, crop: crop, displaySize: displaySize, trim: trim)
+    }
+}
+
+private struct NativeVideoSurface: NSViewRepresentable {
+    let player: AVPlayer
 
     func makeNSView(context: Context) -> AVPlayerView {
         let view = AVPlayerView()
-        view.controlsStyle = .inline
+        view.controlsStyle = .none
         view.videoGravity = .resizeAspect
-        view.player = context.coordinator.player
-        context.coordinator.play(url, crop: crop, displaySize: displaySize, trim: trim)
+        view.player = player
         return view
     }
 
     func updateNSView(_ nsView: AVPlayerView, context: Context) {
-        if context.coordinator.needsUpdate(url: url, crop: crop, displaySize: displaySize, trim: trim) {
-            context.coordinator.play(url, crop: crop, displaySize: displaySize, trim: trim)
-        } else {
-            context.coordinator.player.play()
+        nsView.player = player
+    }
+}
+
+private struct NativeVideoControls: View {
+    @ObservedObject var controller: NativeVideoController
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Button {
+                controller.skip(by: -15)
+            } label: {
+                Image(systemName: "gobackward.15")
+                    .font(.system(size: 22, weight: .semibold))
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.plain)
+            .quickTooltip("Back 15 Seconds", placement: .above)
+            .accessibilityLabel("Back 15 Seconds")
+
+            Button {
+                controller.togglePlayback()
+            } label: {
+                Image(systemName: controller.isPlaying ? "pause.fill" : "play.fill")
+                    .font(.system(size: 22, weight: .semibold))
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.plain)
+            .quickTooltip(controller.isPlaying ? "Pause Video" : "Play Video", placement: .above)
+            .accessibilityLabel(controller.isPlaying ? "Pause Video" : "Play Video")
+
+            Button {
+                controller.skip(by: 15)
+            } label: {
+                Image(systemName: "goforward.15")
+                    .font(.system(size: 22, weight: .semibold))
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.plain)
+            .quickTooltip("Forward 15 Seconds", placement: .above)
+            .accessibilityLabel("Forward 15 Seconds")
+
+            Text(MediaTrim.format(controller.currentTime))
+                .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .quickTooltip("Current Video Time", placement: .above)
+                .accessibilityLabel("Current Video Time")
+
+            Slider(
+                value: Binding(
+                    get: { controller.sliderTime },
+                    set: { controller.seek(to: $0) }
+                ),
+                in: controller.seekRange
+            )
+            .controlSize(.small)
+            .frame(minWidth: 120, maxWidth: .infinity)
+            .quickTooltip("Seek Video", placement: .above)
+            .accessibilityLabel("Seek Video")
+
+            Text(MediaTrim.format(controller.playbackEnd))
+                .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .quickTooltip("Video End Time", placement: .above)
+                .accessibilityLabel("Video End Time")
         }
-        nsView.player = context.coordinator.player
+        .frame(maxWidth: .infinity)
+        .foregroundStyle(.white)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial, in: Capsule())
+        .shadow(color: .black.opacity(0.18), radius: 12, y: 5)
+    }
+}
+
+@MainActor
+private final class NativeVideoController: ObservableObject {
+    let player = AVPlayer()
+
+    @Published var currentTime: TimeInterval = 0
+    @Published var duration: TimeInterval = 0
+    @Published var isPlaying = false
+
+    private var url: URL?
+    private var crop = NormalizedCrop.full
+    private var displaySize: CGSize?
+    private var trim: MediaTrim?
+    private var loadTask: Task<Void, Never>?
+    private var boundaryObserver: Any?
+    private var timeObserver: Any?
+    private var timeControlObservation: NSKeyValueObservation?
+
+    var playbackStart: TimeInterval {
+        trim?.start ?? 0
     }
 
-    static func dismantleNSView(_ nsView: AVPlayerView, coordinator: Coordinator) {
-        coordinator.stop()
-        nsView.player = nil
+    var playbackEnd: TimeInterval {
+        trim?.end ?? duration
     }
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator()
+    var sliderTime: TimeInterval {
+        min(max(currentTime, seekRange.lowerBound), seekRange.upperBound)
+    }
+
+    var seekRange: ClosedRange<TimeInterval> {
+        let lowerBound = playbackStart
+        let upperBound = max(lowerBound + 0.01, playbackEnd)
+        return lowerBound...upperBound
+    }
+
+    init() {
+        installTimeObserverIfNeeded()
+
+        timeControlObservation = player.observe(\.timeControlStatus, options: [.initial, .new]) { [weak self] player, _ in
+            Task { @MainActor in
+                self?.isPlaying = player.timeControlStatus == .playing
+            }
+        }
+    }
+
+    deinit {
+        loadTask?.cancel()
+    }
+
+    func play(_ url: URL, crop: NormalizedCrop, displaySize: CGSize?, trim: MediaTrim?) {
+        installTimeObserverIfNeeded()
+
+        guard sourceNeedsUpdate(url: url, crop: crop, displaySize: displaySize) else {
+            if self.trim != trim {
+                applyTrim(trim, seekToStart: true)
+            }
+            if let trim, boundaryObserver == nil {
+                installBoundaryObserver(end: trim.end, start: trim.start)
+            }
+            player.play()
+            return
+        }
+
+        self.url = url
+        self.crop = crop
+        self.displaySize = displaySize
+        self.trim = trim
+
+        loadTask?.cancel()
+        removeBoundaryObserver()
+        let player = player
+        loadTask = Task { @MainActor in
+            let result = await Self.playerItem(url: url, crop: crop, displaySize: displaySize)
+            guard !Task.isCancelled else { return }
+            duration = result.duration
+            player.replaceCurrentItem(with: result.item)
+            let start = trim?.start ?? 0
+            currentTime = start
+            let startTime = CMTime(seconds: start, preferredTimescale: 600)
+            await player.seek(to: startTime, toleranceBefore: .zero, toleranceAfter: .zero)
+            if let trim {
+                installBoundaryObserver(end: trim.end, start: trim.start)
+            }
+            player.play()
+        }
+    }
+
+    private func installTimeObserverIfNeeded() {
+        guard timeObserver == nil else { return }
+
+        timeObserver = player.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.01, preferredTimescale: 600),
+            queue: .main
+        ) { [weak self] time in
+            guard let self else { return }
+            let seconds = CMTimeGetSeconds(time)
+            guard seconds.isFinite else { return }
+            Task { @MainActor in
+                self.currentTime = seconds
+            }
+        }
+    }
+
+    func togglePlayback() {
+        if isPlaying {
+            player.pause()
+        } else {
+            if currentTime >= playbackEnd - 0.01 {
+                seek(to: playbackStart)
+            }
+            player.play()
+        }
+    }
+
+    func skip(by seconds: TimeInterval) {
+        seek(to: currentTime + seconds)
+    }
+
+    func seek(to seconds: TimeInterval) {
+        let clampedSeconds = min(max(seconds, seekRange.lowerBound), seekRange.upperBound)
+        currentTime = clampedSeconds
+        let time = CMTime(seconds: clampedSeconds, preferredTimescale: 600)
+        player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
+    }
+
+    func stop() {
+        loadTask?.cancel()
+        removeBoundaryObserver()
+        if let timeObserver {
+            player.removeTimeObserver(timeObserver)
+            self.timeObserver = nil
+        }
+        player.pause()
+    }
+
+    private func sourceNeedsUpdate(url: URL, crop: NormalizedCrop, displaySize: CGSize?) -> Bool {
+        self.url != url
+            || self.crop != crop
+            || self.displaySize != displaySize
+    }
+
+    private func applyTrim(_ trim: MediaTrim?, seekToStart: Bool) {
+        self.trim = trim
+        removeBoundaryObserver()
+
+        if let trim {
+            installBoundaryObserver(end: trim.end, start: trim.start)
+            if seekToStart {
+                seek(to: trim.start)
+            } else if currentTime < trim.start || currentTime > trim.end {
+                seek(to: min(max(currentTime, trim.start), trim.end))
+            }
+        } else if seekToStart {
+            seek(to: 0)
+        }
     }
 
     @MainActor
-    final class Coordinator {
-        let player = AVPlayer()
-        var url: URL?
-        var crop = NormalizedCrop.full
-        var displaySize: CGSize?
-        var trim: MediaTrim?
-        private var loadTask: Task<Void, Never>?
-        private var boundaryObserver: Any?
-
-        func needsUpdate(url: URL, crop: NormalizedCrop, displaySize: CGSize?, trim: MediaTrim?) -> Bool {
-            self.url != url
-                || self.crop != crop
-                || self.displaySize != displaySize
-                || self.trim != trim
+    private static func playerItem(url: URL, crop: NormalizedCrop, displaySize: CGSize?) async -> (item: AVPlayerItem, duration: TimeInterval) {
+        let asset = AVURLAsset(url: url)
+        let item = AVPlayerItem(asset: asset)
+        let duration = await duration(for: asset)
+        guard !crop.isFullFrame,
+              let displaySize,
+              let videoComposition = await videoComposition(for: asset, crop: crop, displaySize: displaySize)
+        else {
+            return (item, duration)
         }
 
-        func play(_ url: URL, crop: NormalizedCrop, displaySize: CGSize?, trim: MediaTrim?) {
-            self.url = url
-            self.crop = crop
-            self.displaySize = displaySize
-            self.trim = trim
+        item.videoComposition = videoComposition
+        return (item, duration)
+    }
 
-            loadTask?.cancel()
-            removeBoundaryObserver()
-            let player = player
-            loadTask = Task { @MainActor in
-                let playerItem = await Self.playerItem(url: url, crop: crop, displaySize: displaySize)
-                guard !Task.isCancelled else { return }
-                player.replaceCurrentItem(with: playerItem)
-                let startTime = CMTime(seconds: trim?.start ?? 0, preferredTimescale: 600)
-                await player.seek(to: startTime)
-                if let trim {
-                    installBoundaryObserver(end: trim.end, start: trim.start)
-                }
+    private static func duration(for asset: AVURLAsset) async -> TimeInterval {
+        do {
+            let duration = try await asset.load(.duration)
+            let seconds = CMTimeGetSeconds(duration)
+            return seconds.isFinite ? max(0, seconds) : 0
+        } catch {
+            return 0
+        }
+    }
+
+    private static func videoComposition(
+        for asset: AVURLAsset,
+        crop: NormalizedCrop,
+        displaySize: CGSize
+    ) async -> AVMutableVideoComposition? {
+        do {
+            guard let track = try await asset.loadTracks(withMediaType: .video).first else {
+                return nil
+            }
+
+            let duration = try await asset.load(.duration)
+            let naturalSize = try await track.load(.naturalSize)
+            let preferredTransform = try await track.load(.preferredTransform)
+            let transformedBounds = CGRect(origin: .zero, size: naturalSize)
+                .applying(preferredTransform)
+                .standardized
+            let cropRect = crop.pixelRect(in: displaySize)
+            guard cropRect.width > 1, cropRect.height > 1 else {
+                return nil
+            }
+
+            let frameRate = try await track.load(.nominalFrameRate)
+            let videoComposition = AVMutableVideoComposition()
+            videoComposition.renderSize = CGSize(
+                width: max(2, floor(cropRect.width / 2) * 2),
+                height: max(2, floor(cropRect.height / 2) * 2)
+            )
+            videoComposition.frameDuration = CMTime(
+                value: 1,
+                timescale: CMTimeScale(max(frameRate.rounded(), 24))
+            )
+
+            let instruction = AVMutableVideoCompositionInstruction()
+            instruction.timeRange = CMTimeRange(start: .zero, duration: duration)
+
+            let layerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: track)
+            let translation = CGAffineTransform(
+                translationX: -transformedBounds.minX - cropRect.minX,
+                y: -transformedBounds.minY - cropRect.minY
+            )
+            layerInstruction.setTransform(preferredTransform.concatenating(translation), at: .zero)
+            instruction.layerInstructions = [layerInstruction]
+            videoComposition.instructions = [instruction]
+
+            return videoComposition
+        } catch {
+            return nil
+        }
+    }
+
+    @MainActor
+    private func installBoundaryObserver(end: TimeInterval, start: TimeInterval) {
+        removeBoundaryObserver()
+        let endTime = CMTime(seconds: end, preferredTimescale: 600)
+        boundaryObserver = player.addBoundaryTimeObserver(forTimes: [NSValue(time: endTime)], queue: .main) { [weak self] in
+            guard let self else { return }
+            Task { @MainActor in
+                currentTime = start
+                let startTime = CMTime(seconds: start, preferredTimescale: 600)
+                player.seek(to: startTime, toleranceBefore: .zero, toleranceAfter: .zero)
                 player.play()
             }
         }
+    }
 
-        deinit {
-            loadTask?.cancel()
-        }
-
-        func stop() {
-            loadTask?.cancel()
-            removeBoundaryObserver()
-            player.pause()
-        }
-
-        @MainActor
-        private static func playerItem(url: URL, crop: NormalizedCrop, displaySize: CGSize?) async -> AVPlayerItem {
-            let asset = AVURLAsset(url: url)
-            let item = AVPlayerItem(asset: asset)
-            guard !crop.isFullFrame,
-                  let displaySize,
-                  let videoComposition = await videoComposition(for: asset, crop: crop, displaySize: displaySize)
-            else {
-                return item
-            }
-
-            item.videoComposition = videoComposition
-            return item
-        }
-
-        private static func videoComposition(
-            for asset: AVURLAsset,
-            crop: NormalizedCrop,
-            displaySize: CGSize
-        ) async -> AVMutableVideoComposition? {
-            do {
-                guard let track = try await asset.loadTracks(withMediaType: .video).first else {
-                    return nil
-                }
-
-                let duration = try await asset.load(.duration)
-                let naturalSize = try await track.load(.naturalSize)
-                let preferredTransform = try await track.load(.preferredTransform)
-                let transformedBounds = CGRect(origin: .zero, size: naturalSize)
-                    .applying(preferredTransform)
-                    .standardized
-                let cropRect = crop.pixelRect(in: displaySize)
-                guard cropRect.width > 1, cropRect.height > 1 else {
-                    return nil
-                }
-
-                let frameRate = try await track.load(.nominalFrameRate)
-                let videoComposition = AVMutableVideoComposition()
-                videoComposition.renderSize = CGSize(
-                    width: max(2, floor(cropRect.width / 2) * 2),
-                    height: max(2, floor(cropRect.height / 2) * 2)
-                )
-                videoComposition.frameDuration = CMTime(
-                    value: 1,
-                    timescale: CMTimeScale(max(frameRate.rounded(), 24))
-                )
-
-                let instruction = AVMutableVideoCompositionInstruction()
-                instruction.timeRange = CMTimeRange(start: .zero, duration: duration)
-
-                let layerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: track)
-                let translation = CGAffineTransform(
-                    translationX: -transformedBounds.minX - cropRect.minX,
-                    y: -transformedBounds.minY - cropRect.minY
-                )
-                layerInstruction.setTransform(preferredTransform.concatenating(translation), at: .zero)
-                instruction.layerInstructions = [layerInstruction]
-                videoComposition.instructions = [instruction]
-
-                return videoComposition
-            } catch {
-                return nil
-            }
-        }
-
-        @MainActor
-        private func installBoundaryObserver(end: TimeInterval, start: TimeInterval) {
-            removeBoundaryObserver()
-            let endTime = CMTime(seconds: end, preferredTimescale: 600)
-            boundaryObserver = player.addBoundaryTimeObserver(forTimes: [NSValue(time: endTime)], queue: .main) { [weak self] in
-                guard let self else { return }
-                let startTime = CMTime(seconds: start, preferredTimescale: 600)
-                self.player.seek(to: startTime, toleranceBefore: .zero, toleranceAfter: .zero)
-                self.player.play()
-            }
-        }
-
-        @MainActor
-        private func removeBoundaryObserver() {
-            if let boundaryObserver {
-                player.removeTimeObserver(boundaryObserver)
-                self.boundaryObserver = nil
-            }
+    @MainActor
+    private func removeBoundaryObserver() {
+        if let boundaryObserver {
+            player.removeTimeObserver(boundaryObserver)
+            self.boundaryObserver = nil
         }
     }
 }
