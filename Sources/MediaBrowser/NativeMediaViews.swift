@@ -51,6 +51,7 @@ struct NativeWebImageView: NSViewRepresentable {
         Coordinator(url: url)
     }
 
+    @MainActor
     final class Coordinator {
         var url: URL
 
@@ -98,19 +99,21 @@ struct NativeWebImageView: NSViewRepresentable {
 
 struct NativeVideoView: NSViewRepresentable {
     let url: URL
+    var crop = NormalizedCrop.full
+    var displaySize: CGSize?
 
     func makeNSView(context: Context) -> AVPlayerView {
         let view = AVPlayerView()
         view.controlsStyle = .inline
         view.videoGravity = .resizeAspect
         view.player = context.coordinator.player
-        context.coordinator.play(url)
+        context.coordinator.play(url, crop: crop, displaySize: displaySize)
         return view
     }
 
     func updateNSView(_ nsView: AVPlayerView, context: Context) {
-        if context.coordinator.url != url {
-            context.coordinator.play(url)
+        if context.coordinator.needsUpdate(url: url, crop: crop, displaySize: displaySize) {
+            context.coordinator.play(url, crop: crop, displaySize: displaySize)
         } else {
             context.coordinator.player.play()
         }
@@ -129,13 +132,99 @@ struct NativeVideoView: NSViewRepresentable {
     final class Coordinator {
         let player = AVPlayer()
         var url: URL?
+        var crop = NormalizedCrop.full
+        var displaySize: CGSize?
+        private var loadTask: Task<Void, Never>?
 
-        func play(_ url: URL) {
+        func needsUpdate(url: URL, crop: NormalizedCrop, displaySize: CGSize?) -> Bool {
+            self.url != url
+                || self.crop != crop
+                || self.displaySize != displaySize
+        }
+
+        func play(_ url: URL, crop: NormalizedCrop, displaySize: CGSize?) {
             self.url = url
-            let item = AVPlayerItem(url: url)
-            player.replaceCurrentItem(with: item)
-            player.seek(to: .zero)
-            player.play()
+            self.crop = crop
+            self.displaySize = displaySize
+
+            loadTask?.cancel()
+            let player = player
+            loadTask = Task { @MainActor in
+                let playerItem = await Self.playerItem(url: url, crop: crop, displaySize: displaySize)
+                guard !Task.isCancelled else { return }
+                player.replaceCurrentItem(with: playerItem)
+                await player.seek(to: .zero)
+                player.play()
+            }
+        }
+
+        deinit {
+            loadTask?.cancel()
+        }
+
+        @MainActor
+        private static func playerItem(url: URL, crop: NormalizedCrop, displaySize: CGSize?) async -> AVPlayerItem {
+            let asset = AVURLAsset(url: url)
+            let item = AVPlayerItem(asset: asset)
+            guard !crop.isFullFrame,
+                  let displaySize,
+                  let videoComposition = await videoComposition(for: asset, crop: crop, displaySize: displaySize)
+            else {
+                return item
+            }
+
+            item.videoComposition = videoComposition
+            return item
+        }
+
+        private static func videoComposition(
+            for asset: AVURLAsset,
+            crop: NormalizedCrop,
+            displaySize: CGSize
+        ) async -> AVMutableVideoComposition? {
+            do {
+                guard let track = try await asset.loadTracks(withMediaType: .video).first else {
+                    return nil
+                }
+
+                let duration = try await asset.load(.duration)
+                let naturalSize = try await track.load(.naturalSize)
+                let preferredTransform = try await track.load(.preferredTransform)
+                let transformedBounds = CGRect(origin: .zero, size: naturalSize)
+                    .applying(preferredTransform)
+                    .standardized
+                let cropRect = crop.pixelRect(in: displaySize)
+                guard cropRect.width > 1, cropRect.height > 1 else {
+                    return nil
+                }
+
+                let frameRate = try await track.load(.nominalFrameRate)
+                let videoComposition = AVMutableVideoComposition()
+                videoComposition.renderSize = CGSize(
+                    width: max(2, floor(cropRect.width / 2) * 2),
+                    height: max(2, floor(cropRect.height / 2) * 2)
+                )
+                videoComposition.frameDuration = CMTime(
+                    value: 1,
+                    timescale: CMTimeScale(max(frameRate.rounded(), 24))
+                )
+
+                let instruction = AVMutableVideoCompositionInstruction()
+                instruction.timeRange = CMTimeRange(start: .zero, duration: duration)
+
+                let layerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: track)
+                let translation = CGAffineTransform(
+                    translationX: -transformedBounds.minX - cropRect.minX,
+                    y: -transformedBounds.minY - cropRect.minY
+                )
+                layerInstruction.setTransform(preferredTransform.concatenating(translation), at: .zero)
+                instruction.layerInstructions = [layerInstruction]
+                videoComposition.instructions = [instruction]
+
+                return videoComposition
+            } catch {
+                return nil
+            }
         }
     }
 }

@@ -13,7 +13,8 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "MediaBrowser",
-            path: "Sources/MediaBrowser"
+            path: "Sources/MediaBrowser",
+            exclude: ["crash.log"]
         )
     ]
 )

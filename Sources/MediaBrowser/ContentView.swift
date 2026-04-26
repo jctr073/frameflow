@@ -8,15 +8,18 @@ struct ContentView: View {
     @State private var zoomIndex = 3
     @State private var filterText = ""
     @State private var selectedStatus = MediaStatus(size: nil, duration: nil)
-    @State private var pinnedItems: [MediaItem] = []
+    @State private var pinnedItems: [PinnedMediaItem] = []
     @State private var pinnedThumbnails: [URL: NSImage] = [:]
     @State private var activePanel: SidePanel = .thumbnail
     @State private var thumbnailSelectionID: URL?
     @State private var isCopyingPinnedFiles = false
+    @State private var isCropToolActive = false
+    @State private var cropRects: [URL: NormalizedCrop] = [:]
 
     private let initialFolderURL: URL?
     private let zoomLevels = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0]
     private let sidePanelRowInsets = EdgeInsets(top: 8, leading: 18, bottom: 8, trailing: 18)
+    private let topToolbarHeight: CGFloat = 48
 
     init(initialFolderURL: URL?) {
         self.initialFolderURL = initialFolderURL
@@ -28,7 +31,7 @@ struct ContentView: View {
                 thumbnailPanel
                     .frame(minWidth: 132, idealWidth: 170, maxWidth: 260)
 
-                previewPanel
+                mainPanel
                     .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
 
                 if !pinnedItems.isEmpty {
@@ -96,10 +99,11 @@ struct ContentView: View {
                                 FolderRow(entry: folderEntry)
                                     .listRowInsets(sidePanelRowInsets)
                                     .tag(entry.id)
-                                    .accessibilityLabel(folderEntry.folder.name)
-                                    .onTapGesture {
-                                        activePanel = .thumbnail
-                                        thumbnailSelectionID = entry.id
+                                .accessibilityLabel(folderEntry.folder.name)
+                                .help(folderEntry.folder.url.path)
+                                .onTapGesture {
+                                    activePanel = .thumbnail
+                                    thumbnailSelectionID = entry.id
                                         library.toggleFolder(folderEntry.folder)
                                     }
                             case .item(let itemEntry):
@@ -111,6 +115,7 @@ struct ContentView: View {
                                 .listRowInsets(sidePanelRowInsets)
                                 .tag(entry.id)
                                 .accessibilityLabel(itemEntry.item.fileName)
+                                .help(itemEntry.item.url.path)
                                 .onTapGesture {
                                     activePanel = .thumbnail
                                     thumbnailSelectionID = entry.id
@@ -148,6 +153,7 @@ struct ContentView: View {
                 if isCopyingPinnedFiles {
                     ProgressView()
                         .controlSize(.small)
+                        .help("Saving Pinned Files")
                 } else {
                     Button {
                         copyPinnedFilesToFolder()
@@ -175,9 +181,10 @@ struct ContentView: View {
                 Text("\(pinnedItems.count)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .help("\(pinnedItems.count) Pinned Files")
             }
+            .frame(height: topToolbarHeight)
             .padding(.horizontal, 10)
-            .padding(.vertical, 8)
             .background(.bar)
             .overlay(alignment: .bottom) {
                 Divider()
@@ -185,22 +192,27 @@ struct ContentView: View {
 
             ScrollViewReader { proxy in
                 List(selection: $library.selectedID) {
-                    ForEach(pinnedItems) { item in
-                        ThumbnailRow(item: item, thumbnail: pinnedThumbnail(for: item))
+                    ForEach(pinnedItems) { pinnedItem in
+                        ThumbnailRow(
+                            item: pinnedItem.item,
+                            thumbnail: pinnedThumbnail(for: pinnedItem.item),
+                            isEdited: pinnedItem.isEdited
+                        )
                             .listRowInsets(sidePanelRowInsets)
-                            .tag(item.id)
-                            .accessibilityLabel(item.fileName)
+                            .tag(pinnedItem.id)
+                            .accessibilityLabel(pinnedItem.item.fileName)
+                            .help(pinnedItem.item.url.path)
                             .onTapGesture {
                                 activePanel = .pinned
-                                library.selectedID = item.id
+                                library.selectedID = pinnedItem.id
                             }
                             .contextMenu {
                                 Button("Remove from Pinned") {
-                                    unpin(item)
+                                    unpin(pinnedItem.item)
                                 }
                             }
-                            .task(id: item.id) {
-                                await loadPinnedThumbnailIfNeeded(for: item)
+                            .task(id: pinnedItem.id) {
+                                await loadPinnedThumbnailIfNeeded(for: pinnedItem.item)
                             }
                     }
                 }
@@ -241,10 +253,11 @@ struct ContentView: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .help(library.folderURL?.path ?? "No Folder")
         }
+        .frame(height: topToolbarHeight)
         .padding(.leading, 10)
         .padding(.trailing, 8)
-        .padding(.vertical, 8)
         .background(.bar)
         .overlay(alignment: .bottom) {
             Divider()
@@ -260,6 +273,7 @@ struct ContentView: View {
             TextField("Filter files", text: $filterText)
                 .textFieldStyle(.plain)
                 .font(.caption)
+                .help("Filter Files")
 
             if !filterText.isEmpty {
                 Button {
@@ -314,18 +328,21 @@ struct ContentView: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .help(statusPathText)
 
             if !selectedStatus.detailText.isEmpty {
                 Text(selectedStatus.detailText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                    .help(selectedStatus.detailText)
             }
 
             Text(statusCountText)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
+                .help(statusCountText)
         }
         .frame(height: 28)
         .padding(.leading, 8)
@@ -382,7 +399,137 @@ struct ContentView: View {
     private var selectedItem: MediaItem? {
         guard let selectedID = library.selectedID else { return nil }
         return library.item(withID: selectedID)
-            ?? pinnedItems.first { $0.id == selectedID }
+            ?? pinnedItems.first { $0.id == selectedID }?.item
+    }
+
+    private var selectedPinnedItem: PinnedMediaItem? {
+        guard activePanel == .pinned,
+              let selectedID = library.selectedID
+        else {
+            return nil
+        }
+        return pinnedItems.first { $0.id == selectedID }
+    }
+
+    private var selectedCrop: NormalizedCrop {
+        guard let selectedItem else { return .full }
+        return cropRects[selectedItem.id]
+            ?? selectedPinnedItem?.crop
+            ?? .full
+    }
+
+    private var selectedAppliedCrop: NormalizedCrop {
+        guard let selectedID = library.selectedID else { return .full }
+        return pinnedItems.first { $0.id == selectedID }?.crop ?? .full
+    }
+
+    private var mainPanel: some View {
+        VStack(spacing: 0) {
+            editingToolbar
+            previewPanel
+        }
+    }
+
+    private var editingToolbar: some View {
+        HStack(spacing: 4) {
+            Button {
+                isCropToolActive.toggle()
+            } label: {
+                Image(systemName: "crop")
+                    .font(.system(size: 14, weight: .medium))
+                    .frame(width: 28, height: 26)
+            }
+            .buttonStyle(.plain)
+            .disabled(selectedItem == nil)
+            .foregroundStyle(isCropToolActive ? Color.accentColor : Color.primary)
+            .help("Crop Tool")
+            .accessibilityLabel("Crop Tool")
+
+            Menu {
+                Button("Square 1:1") {
+                    applyCropPreset(width: 1, height: 1)
+                }
+                Button("Portrait 4:5") {
+                    applyCropPreset(width: 4, height: 5)
+                }
+                Button("Story/Reel 9:16") {
+                    applyCropPreset(width: 9, height: 16)
+                }
+                Button("Landscape 16:9") {
+                    applyCropPreset(width: 16, height: 9)
+                }
+                Button("Classic 4:3") {
+                    applyCropPreset(width: 4, height: 3)
+                }
+                Button("Open Graph 1.91:1") {
+                    applyCropPreset(width: 1.91, height: 1)
+                }
+            } label: {
+                Image(systemName: "aspectratio")
+                    .font(.system(size: 14, weight: .medium))
+                    .frame(width: 28, height: 26)
+            }
+            .buttonStyle(.plain)
+            .disabled(selectedItem == nil)
+            .help("Crop Presets")
+            .accessibilityLabel("Crop Presets")
+
+            Button {
+                clearSelectedCrop()
+            } label: {
+                Image(systemName: "arrow.counterclockwise")
+                    .font(.system(size: 13, weight: .medium))
+                    .frame(width: 28, height: 26)
+            }
+            .buttonStyle(.plain)
+            .disabled(selectedItem == nil || selectedCrop.isFullFrame)
+            .help("Reset Crop")
+            .accessibilityLabel("Reset Crop")
+
+            Divider()
+                .frame(height: 18)
+                .padding(.horizontal, 3)
+
+            Button {
+                applySelectedCrop()
+            } label: {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 14, weight: .medium))
+                    .frame(width: 28, height: 26)
+            }
+            .buttonStyle(.plain)
+            .disabled(selectedItem == nil || selectedCrop.isFullFrame || !isCropToolActive)
+            .help("Apply Crop")
+            .accessibilityLabel("Apply Crop")
+
+            Button {
+                pinEditedSelectedItem()
+            } label: {
+                Image(systemName: "pin")
+                    .font(.system(size: 14, weight: .medium))
+                    .frame(width: 28, height: 26)
+            }
+            .buttonStyle(.plain)
+            .disabled(selectedItem == nil || selectedAppliedCrop.isFullFrame)
+            .help("Move Edited Media to Pinned")
+            .accessibilityLabel("Move Edited Media to Pinned")
+
+            if !selectedCrop.isFullFrame {
+                Text(selectedCrop.displayLabel)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .padding(.leading, 4)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .frame(height: topToolbarHeight)
+        .padding(.horizontal, 10)
+        .background(.bar)
+        .overlay(alignment: .bottom) {
+            Divider()
+        }
     }
 
     private var previewPanel: some View {
@@ -390,7 +537,14 @@ struct ContentView: View {
             Color(nsColor: .underPageBackgroundColor)
 
             if let item = selectedItem {
-                PreviewPane(item: item, zoomMultiplier: zoomLevels[zoomIndex])
+                PreviewPane(
+                    item: item,
+                    zoomMultiplier: zoomLevels[zoomIndex],
+                    isCropToolActive: isCropToolActive,
+                    appliedCrop: selectedAppliedCrop,
+                    onApplyCrop: applySelectedCrop,
+                    crop: cropBinding(for: item)
+                )
                     .id(item.id)
             } else {
                 Text(library.stateMessage)
@@ -462,6 +616,24 @@ struct ContentView: View {
     }
 
     private func handleKeyDown(_ event: NSEvent) -> Bool {
+        if selectedItem != nil,
+           isCropToolActive || !selectedCrop.isFullFrame {
+            switch event.keyCode {
+            case 36, 76:
+                DispatchQueue.main.async {
+                    applySelectedCrop()
+                }
+                return true
+            case 53:
+                DispatchQueue.main.async {
+                    clearSelectedCrop()
+                }
+                return true
+            default:
+                break
+            }
+        }
+
         if event.modifierFlags.contains(.control),
            event.charactersIgnoringModifiers?.lowercased() == "p" {
             pinActiveThumbnailOrPreview()
@@ -505,6 +677,51 @@ struct ContentView: View {
 
     private func zoomOut() {
         zoomIndex = max(zoomIndex - 1, zoomLevels.startIndex)
+    }
+
+    private func cropBinding(for item: MediaItem) -> Binding<NormalizedCrop> {
+        Binding {
+            cropRects[item.id] ?? selectedPinnedItem?.crop ?? .full
+        } set: { newValue in
+            cropRects[item.id] = newValue.clamped()
+        }
+    }
+
+    private func applyCropPreset(width: CGFloat, height: CGFloat) {
+        guard let item = selectedItem else { return }
+        let naturalSize = selectedStatus.size ?? CGSize(width: width, height: height)
+        cropRects[item.id] = NormalizedCrop.centered(
+            aspectRatio: width / height,
+            naturalSize: naturalSize
+        )
+        isCropToolActive = true
+    }
+
+    private func clearSelectedCrop() {
+        guard let item = selectedItem else { return }
+        cropRects[item.id] = .full
+        if let index = pinnedItems.firstIndex(where: { $0.id == item.id }) {
+            pinnedItems[index].crop = nil
+        }
+        isCropToolActive = false
+    }
+
+    private func applySelectedCrop() {
+        guard let item = selectedItem else { return }
+        let crop = selectedCrop.clamped()
+        guard !crop.isFullFrame else { return }
+        pin(item, crop: crop)
+        cropRects[item.id] = crop
+        isCropToolActive = false
+    }
+
+    private func pinEditedSelectedItem() {
+        guard let item = selectedItem else { return }
+        let crop = selectedAppliedCrop.clamped()
+        guard !crop.isFullFrame else { return }
+        pin(item, crop: crop)
+        activePanel = .pinned
+        library.selectedID = item.id
     }
 
     private func selectFirstVisibleItemIfNeeded() {
@@ -606,9 +823,19 @@ struct ContentView: View {
         library.selectedID = pinnedItems.first?.id
     }
 
-    private func pin(_ item: MediaItem) {
-        guard !pinnedItems.contains(where: { $0.id == item.id }) else { return }
-        pinnedItems.append(item)
+    private func pin(_ item: MediaItem, crop: NormalizedCrop? = nil) {
+        let normalizedCrop = crop?.clamped()
+        if let index = pinnedItems.firstIndex(where: { $0.id == item.id }) {
+            if let normalizedCrop, !normalizedCrop.isFullFrame {
+                pinnedItems[index].crop = normalizedCrop
+            }
+            return
+        }
+
+        pinnedItems.append(PinnedMediaItem(
+            item: item,
+            crop: normalizedCrop?.isFullFrame == false ? normalizedCrop : nil
+        ))
         if let thumbnail = library.thumbnails[item.url] {
             pinnedThumbnails[item.url] = thumbnail
         }
@@ -689,20 +916,23 @@ struct ContentView: View {
         }
     }
 
-    private func copyPinnedItems(_ items: [MediaItem], to destinationURL: URL) async -> PinnedCopyResult {
+    private func copyPinnedItems(_ items: [PinnedMediaItem], to destinationURL: URL) async -> PinnedCopyResult {
         await Task.detached(priority: .userInitiated) {
-            let fileManager = FileManager.default
             var copiedCount = 0
             var failures: [String] = []
             var reservedNames = Set<String>()
 
-            for item in items {
+            for pinnedItem in items {
                 do {
-                    let copyURL = uniqueCopyURL(for: item.url, in: destinationURL, reservedNames: &reservedNames)
-                    try fileManager.copyItem(at: item.url, to: copyURL)
+                    let copyURL = uniqueCopyURL(
+                        fileName: MediaExport.destinationFileName(for: pinnedItem),
+                        in: destinationURL,
+                        reservedNames: &reservedNames
+                    )
+                    try await MediaExport.export(pinnedItem, to: copyURL)
                     copiedCount += 1
                 } catch {
-                    failures.append("\(item.fileName): \(error.localizedDescription)")
+                    failures.append("\(pinnedItem.item.fileName): \(error.localizedDescription)")
                 }
             }
 
@@ -713,7 +943,7 @@ struct ContentView: View {
     private func showPinnedCopyResult(_ result: PinnedCopyResult, destinationURL: URL) {
         let alert = NSAlert()
         alert.alertStyle = result.failures.isEmpty ? .informational : .warning
-        alert.messageText = result.failures.isEmpty ? "Pinned Files Copied" : "Some Pinned Files Could Not Be Copied"
+        alert.messageText = result.failures.isEmpty ? "Pinned Files Saved" : "Some Pinned Files Could Not Be Saved"
         alert.informativeText = pinnedCopyInformativeText(for: result, destinationURL: destinationURL)
         alert.addButton(withTitle: "OK")
         alert.runModal()
@@ -721,7 +951,7 @@ struct ContentView: View {
 
     private func pinnedCopyInformativeText(for result: PinnedCopyResult, destinationURL: URL) -> String {
         let noun = result.copiedCount == 1 ? "file" : "files"
-        var text = "Copied \(result.copiedCount) \(noun) to \(destinationURL.path)."
+        var text = "Saved \(result.copiedCount) \(noun) to \(destinationURL.path)."
 
         if !result.failures.isEmpty {
             let shownFailures = result.failures.prefix(5).joined(separator: "\n")
@@ -817,8 +1047,9 @@ private struct PinnedCopyResult: Sendable {
     let failures: [String]
 }
 
-private func uniqueCopyURL(for sourceURL: URL, in destinationURL: URL, reservedNames: inout Set<String>) -> URL {
+private func uniqueCopyURL(fileName sourceFileName: String, in destinationURL: URL, reservedNames: inout Set<String>) -> URL {
     let fileManager = FileManager.default
+    let sourceURL = URL(fileURLWithPath: sourceFileName)
     let baseName = sourceURL.deletingPathExtension().lastPathComponent
     let pathExtension = sourceURL.pathExtension
     var index = 1
@@ -826,7 +1057,7 @@ private func uniqueCopyURL(for sourceURL: URL, in destinationURL: URL, reservedN
     while true {
         let fileName: String
         if index == 1 {
-            fileName = sourceURL.lastPathComponent
+            fileName = sourceFileName
         } else if pathExtension.isEmpty {
             fileName = "\(baseName) \(index)"
         } else {
@@ -873,6 +1104,7 @@ private extension String {
 struct ThumbnailRow: View {
     let item: MediaItem
     let thumbnail: NSImage?
+    var isEdited = false
     var depth = 0
 
     var body: some View {
@@ -902,6 +1134,16 @@ struct ThumbnailRow: View {
                     .padding(.vertical, 2)
                     .background(.thinMaterial, in: Capsule())
                     .padding(3)
+            }
+            .overlay(alignment: .topLeading) {
+                if isEdited {
+                    Image(systemName: "crop")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 18, height: 18)
+                        .background(Color.accentColor, in: Circle())
+                        .padding(3)
+                }
             }
 
             Text(item.fileName)
@@ -953,6 +1195,10 @@ struct FolderRow: View {
 struct PreviewPane: View {
     let item: MediaItem
     let zoomMultiplier: Double
+    let isCropToolActive: Bool
+    let appliedCrop: NormalizedCrop
+    let onApplyCrop: () -> Void
+    @Binding var crop: NormalizedCrop
 
     @State private var naturalSize: CGSize?
     @State private var failedToLoad = false
@@ -983,13 +1229,16 @@ struct PreviewPane: View {
     }
 
     private func fittedMedia(in containerSize: CGSize, naturalSize: CGSize) -> some View {
+        let displayCrop = isCropToolActive ? NormalizedCrop.full : appliedCrop
+        let sourceRect = displayCrop.pixelRect(in: naturalSize)
+        let displayNaturalSize = displayCrop.isFullFrame ? naturalSize : sourceRect.size
         let baseFitScale = min(
-            containerSize.width / naturalSize.width,
-            containerSize.height / naturalSize.height
+            containerSize.width / displayNaturalSize.width,
+            containerSize.height / displayNaturalSize.height
         )
         let fitScale = item.kind.shouldUpscaleToFit ? baseFitScale : min(baseFitScale, 1.0)
         let scale = max(0.08, fitScale * zoomMultiplier)
-        let mediaSize = CGSize(width: naturalSize.width * scale, height: naturalSize.height * scale)
+        let mediaSize = CGSize(width: displayNaturalSize.width * scale, height: displayNaturalSize.height * scale)
         let contentSize = CGSize(
             width: max(containerSize.width, mediaSize.width),
             height: max(containerSize.height, mediaSize.height)
@@ -997,9 +1246,22 @@ struct PreviewPane: View {
 
         return ScrollView([.horizontal, .vertical]) {
             ZStack {
-                mediaView
+                if item.kind == .video, !isCropToolActive {
+                    NativeVideoView(
+                        url: item.url,
+                        crop: displayCrop,
+                        displaySize: naturalSize
+                    )
                     .frame(width: mediaSize.width, height: mediaSize.height)
-                    .clipped()
+                } else {
+                    viewportedMediaView(sourceRect: sourceRect, naturalSize: naturalSize, scale: scale)
+                        .frame(width: mediaSize.width, height: mediaSize.height)
+                }
+
+                if isCropToolActive {
+                    CropOverlay(crop: $crop, isEditable: isCropToolActive, onApply: onApplyCrop)
+                        .frame(width: mediaSize.width, height: mediaSize.height)
+                }
             }
             .frame(width: contentSize.width, height: contentSize.height)
         }
@@ -1015,8 +1277,200 @@ struct PreviewPane: View {
         case .webp:
             NativeWebImageView(url: item.url)
         case .video:
-            NativeVideoView(url: item.url)
+            NativeVideoView(url: item.url, crop: .full, displaySize: nil)
         }
+    }
+
+    private func viewportedMediaView(sourceRect: CGRect, naturalSize: CGSize, scale: CGFloat) -> some View {
+        mediaView
+            .frame(width: naturalSize.width * scale, height: naturalSize.height * scale)
+            .offset(x: -sourceRect.minX * scale, y: -sourceRect.minY * scale)
+            .frame(width: sourceRect.width * scale, height: sourceRect.height * scale, alignment: .topLeading)
+            .clipped()
+    }
+}
+
+private struct CropOverlay: View {
+    @Binding var crop: NormalizedCrop
+    let isEditable: Bool
+    let onApply: () -> Void
+
+    @State private var activeDragStart: NormalizedCrop?
+
+    var body: some View {
+        GeometryReader { geometry in
+            let cropRect = crop.rect(in: geometry.size)
+
+            ZStack(alignment: .topLeading) {
+                CropDimShape(cropRect: cropRect)
+                    .fill(Color.black.opacity(0.46), style: FillStyle(eoFill: true))
+                    .allowsHitTesting(false)
+
+                Rectangle()
+                    .strokeBorder(Color.white, lineWidth: 1)
+                    .background(Color.white.opacity(0.001))
+                    .frame(width: cropRect.width, height: cropRect.height)
+                    .position(x: cropRect.midX, y: cropRect.midY)
+                    .gesture(moveGesture(in: geometry.size))
+                    .allowsHitTesting(isEditable)
+
+                Rectangle()
+                    .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 2, dash: [7, 5]))
+                    .frame(width: cropRect.width, height: cropRect.height)
+                    .position(x: cropRect.midX, y: cropRect.midY)
+                    .allowsHitTesting(false)
+
+                if isEditable {
+                    ForEach(CropHandle.allCases) { handle in
+                        Circle()
+                            .fill(Color.accentColor)
+                            .stroke(Color.white, lineWidth: 1.5)
+                            .frame(width: 12, height: 12)
+                            .position(handle.position(in: cropRect))
+                            .gesture(resizeGesture(handle: handle, in: geometry.size))
+                    }
+
+                    if !crop.isFullFrame {
+                        Button {
+                            onApply()
+                        } label: {
+                            Label("Apply", systemImage: "checkmark")
+                                .font(.caption.weight(.semibold))
+                                .labelStyle(.titleAndIcon)
+                                .padding(.horizontal, 9)
+                                .padding(.vertical, 5)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.white)
+                        .background(Color.accentColor, in: Capsule())
+                        .position(
+                            x: min(max(cropRect.maxX - 38, 42), geometry.size.width - 42),
+                            y: min(max(cropRect.minY + 22, 22), geometry.size.height - 22)
+                        )
+                        .help("Apply Crop")
+                    }
+                }
+            }
+        }
+    }
+
+    private func moveGesture(in size: CGSize) -> some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                let startCrop = activeDragStart ?? crop
+                activeDragStart = startCrop
+                crop = NormalizedCrop(
+                    x: startCrop.x + value.translation.width / max(size.width, 1),
+                    y: startCrop.y + value.translation.height / max(size.height, 1),
+                    width: startCrop.width,
+                    height: startCrop.height
+                ).clamped()
+            }
+            .onEnded { _ in
+                activeDragStart = nil
+            }
+    }
+
+    private func resizeGesture(handle: CropHandle, in size: CGSize) -> some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                let startCrop = activeDragStart ?? crop
+                activeDragStart = startCrop
+                let deltaX = value.translation.width / max(size.width, 1)
+                let deltaY = value.translation.height / max(size.height, 1)
+                crop = handle.resizedCrop(from: startCrop, deltaX: deltaX, deltaY: deltaY)
+            }
+            .onEnded { _ in
+                activeDragStart = nil
+            }
+    }
+}
+
+private struct CropDimShape: Shape {
+    let cropRect: CGRect
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.addRect(rect)
+        path.addRect(cropRect)
+        return path
+    }
+}
+
+private enum CropHandle: CaseIterable, Identifiable {
+    case topLeading
+    case top
+    case topTrailing
+    case trailing
+    case bottomTrailing
+    case bottom
+    case bottomLeading
+    case leading
+
+    var id: Self { self }
+
+    func position(in rect: CGRect) -> CGPoint {
+        switch self {
+        case .topLeading:
+            CGPoint(x: rect.minX, y: rect.minY)
+        case .top:
+            CGPoint(x: rect.midX, y: rect.minY)
+        case .topTrailing:
+            CGPoint(x: rect.maxX, y: rect.minY)
+        case .trailing:
+            CGPoint(x: rect.maxX, y: rect.midY)
+        case .bottomTrailing:
+            CGPoint(x: rect.maxX, y: rect.maxY)
+        case .bottom:
+            CGPoint(x: rect.midX, y: rect.maxY)
+        case .bottomLeading:
+            CGPoint(x: rect.minX, y: rect.maxY)
+        case .leading:
+            CGPoint(x: rect.minX, y: rect.midY)
+        }
+    }
+
+    func resizedCrop(from crop: NormalizedCrop, deltaX: CGFloat, deltaY: CGFloat) -> NormalizedCrop {
+        let minimumSize = 0.04
+        var minX = crop.x
+        var minY = crop.y
+        var maxX = crop.x + crop.width
+        var maxY = crop.y + crop.height
+
+        switch self {
+        case .topLeading:
+            minX += deltaX
+            minY += deltaY
+        case .top:
+            minY += deltaY
+        case .topTrailing:
+            maxX += deltaX
+            minY += deltaY
+        case .trailing:
+            maxX += deltaX
+        case .bottomTrailing:
+            maxX += deltaX
+            maxY += deltaY
+        case .bottom:
+            maxY += deltaY
+        case .bottomLeading:
+            minX += deltaX
+            maxY += deltaY
+        case .leading:
+            minX += deltaX
+        }
+
+        minX = min(max(minX, 0), maxX - minimumSize)
+        minY = min(max(minY, 0), maxY - minimumSize)
+        maxX = max(min(maxX, 1), minX + minimumSize)
+        maxY = max(min(maxY, 1), minY + minimumSize)
+
+        return NormalizedCrop(
+            x: minX,
+            y: minY,
+            width: maxX - minX,
+            height: maxY - minY
+        ).clamped(minimumSize: minimumSize)
     }
 }
 
