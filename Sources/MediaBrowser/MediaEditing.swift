@@ -73,29 +73,92 @@ struct NormalizedCrop: Equatable, Hashable, Sendable {
     }
 }
 
+struct MediaTrim: Equatable, Hashable, Sendable {
+    var start: TimeInterval
+    var end: TimeInterval
+
+    static let minimumDuration: TimeInterval = 0.1
+
+    var duration: TimeInterval {
+        max(0, end - start)
+    }
+
+    var displayLabel: String {
+        "\(Self.format(start))-\(Self.format(end))"
+    }
+
+    func isFullLength(for totalDuration: TimeInterval?) -> Bool {
+        guard let totalDuration, totalDuration > 0 else { return true }
+        let trimmed = clamped(to: totalDuration)
+        return trimmed.start <= 0.001 && abs(trimmed.end - totalDuration) <= 0.001
+    }
+
+    func clamped(to totalDuration: TimeInterval) -> MediaTrim {
+        guard totalDuration > 0 else {
+            return MediaTrim(start: 0, end: 0)
+        }
+
+        let minimumDuration = min(Self.minimumDuration, totalDuration)
+        let nextStart = min(max(start, 0), max(0, totalDuration - minimumDuration))
+        let nextEnd = min(max(end, nextStart + minimumDuration), totalDuration)
+        return MediaTrim(start: nextStart, end: nextEnd)
+    }
+
+    func timeRange(in totalDuration: CMTime) -> CMTimeRange {
+        let totalSeconds = CMTimeGetSeconds(totalDuration)
+        let trimmed = clamped(to: totalSeconds)
+        let startTime = CMTime(seconds: trimmed.start, preferredTimescale: 600)
+        let durationTime = CMTime(seconds: trimmed.end - trimmed.start, preferredTimescale: 600)
+        return CMTimeRange(start: startTime, duration: durationTime)
+    }
+
+    static func full(duration: TimeInterval) -> MediaTrim {
+        MediaTrim(start: 0, end: max(0, duration))
+    }
+
+    static func format(_ time: TimeInterval) -> String {
+        let totalSeconds = max(0, Int(time.rounded()))
+        let hours = totalSeconds / 3600
+        let minutes = (totalSeconds % 3600) / 60
+        let seconds = totalSeconds % 60
+
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, seconds)
+        }
+
+        return String(format: "%d:%02d", minutes, seconds)
+    }
+}
+
 struct PinnedMediaItem: Identifiable, Hashable, Sendable {
     var item: MediaItem
     var crop: NormalizedCrop?
+    var trim: MediaTrim?
 
     var id: URL { item.id }
 
     var isEdited: Bool {
-        crop?.isFullFrame == false
+        crop?.isFullFrame == false || trim != nil
     }
 }
 
 enum MediaExport {
     static func export(_ pinnedItem: PinnedMediaItem, to destinationURL: URL) async throws {
-        guard let crop = pinnedItem.crop, !crop.isFullFrame else {
+        let crop = pinnedItem.crop ?? .full
+        let trim = pinnedItem.trim
+
+        guard pinnedItem.isEdited else {
             try FileManager.default.copyItem(at: pinnedItem.item.url, to: destinationURL)
             return
         }
 
         switch pinnedItem.item.kind {
-        case .image, .gif, .webp:
+        case .image, .webp:
             try await exportRasterImage(pinnedItem.item, crop: crop, to: destinationURL)
+        case .gif:
+            try await exportAnimatedGIF(pinnedItem.item, crop: crop, trim: trim, to: destinationURL)
         case .video:
-            try await exportVideo(pinnedItem.item, crop: crop, to: destinationURL)
+            try await exportVideo(pinnedItem.item, crop: crop, trim: trim, to: destinationURL)
         }
     }
 
@@ -105,14 +168,17 @@ enum MediaExport {
         }
 
         let baseName = pinnedItem.item.url.deletingPathExtension().lastPathComponent
+        let suffix = editSuffix(for: pinnedItem)
         switch pinnedItem.item.kind {
         case .video:
-            return "\(baseName)-cropped.mp4"
+            return "\(baseName)\(suffix).mp4"
         case .image:
             let ext = supportedRasterExtension(pinnedItem.item.url.pathExtension)
-            return "\(baseName)-cropped.\(ext)"
-        case .gif, .webp:
-            return "\(baseName)-cropped.png"
+            return "\(baseName)\(suffix).\(ext)"
+        case .gif:
+            return "\(baseName)\(suffix).gif"
+        case .webp:
+            return "\(baseName)\(suffix).png"
         }
     }
 
@@ -157,7 +223,98 @@ enum MediaExport {
         }.value
     }
 
-    private static func exportVideo(_ item: MediaItem, crop: NormalizedCrop, to destinationURL: URL) async throws {
+    private static func exportAnimatedGIF(
+        _ item: MediaItem,
+        crop: NormalizedCrop,
+        trim: MediaTrim?,
+        to destinationURL: URL
+    ) async throws {
+        try await Task.detached(priority: .userInitiated) {
+            guard let source = CGImageSourceCreateWithURL(item.url as CFURL, nil) else {
+                throw MediaExportError.cannotLoadSource
+            }
+
+            let frameCount = CGImageSourceGetCount(source)
+            guard frameCount > 0 else {
+                throw MediaExportError.cannotLoadSource
+            }
+
+            let frameDurations = (0..<frameCount).map { gifFrameDuration(source: source, index: $0) }
+            let totalDuration = frameDurations.reduce(0, +)
+            let effectiveTrim = trim?.clamped(to: totalDuration)
+            let trimStart = effectiveTrim?.start ?? 0
+            let trimEnd = effectiveTrim?.end ?? totalDuration
+            guard trimEnd > trimStart else {
+                throw MediaExportError.invalidTrim
+            }
+
+            var selectedFrames: [(index: Int, delay: TimeInterval)] = []
+            var frameStart: TimeInterval = 0
+            for index in 0..<frameCount {
+                let originalDelay = frameDurations[index]
+                let frameEnd = frameStart + originalDelay
+                defer { frameStart = frameEnd }
+
+                guard frameEnd > trimStart, frameStart < trimEnd else {
+                    continue
+                }
+
+                let clippedDelay = min(frameEnd, trimEnd) - max(frameStart, trimStart)
+                selectedFrames.append((index, max(0.02, clippedDelay.isFinite ? clippedDelay : originalDelay)))
+            }
+
+            guard !selectedFrames.isEmpty else {
+                throw MediaExportError.invalidTrim
+            }
+
+            guard let destination = CGImageDestinationCreateWithURL(
+                destinationURL as CFURL,
+                UTType.gif.identifier as CFString,
+                selectedFrames.count,
+                nil
+            ) else {
+                throw MediaExportError.cannotCreateDestination
+            }
+
+            CGImageDestinationSetProperties(destination, [
+                kCGImagePropertyGIFDictionary: [
+                    kCGImagePropertyGIFLoopCount: 0
+                ]
+            ] as CFDictionary)
+
+            var exportedFrames = 0
+            for frame in selectedFrames {
+                guard let image = CGImageSourceCreateImageAtIndex(source, frame.index, nil) else {
+                    continue
+                }
+
+                let sourceSize = CGSize(width: image.width, height: image.height)
+                let cropRect = crop.pixelRect(in: sourceSize)
+                guard cropRect.width > 1, cropRect.height > 1,
+                      let outputImage = crop.isFullFrame ? image : image.cropping(to: cropRect)
+                else {
+                    throw MediaExportError.invalidCrop
+                }
+
+                CGImageDestinationAddImage(destination, outputImage, [
+                    kCGImagePropertyGIFDictionary: [
+                        kCGImagePropertyGIFDelayTime: frame.delay,
+                        kCGImagePropertyGIFUnclampedDelayTime: frame.delay
+                    ]
+                ] as CFDictionary)
+                exportedFrames += 1
+            }
+
+            guard exportedFrames > 0 else {
+                throw MediaExportError.invalidTrim
+            }
+            guard CGImageDestinationFinalize(destination) else {
+                throw MediaExportError.cannotFinalizeDestination
+            }
+        }.value
+    }
+
+    private static func exportVideo(_ item: MediaItem, crop: NormalizedCrop, trim: MediaTrim?, to destinationURL: URL) async throws {
         let asset = AVURLAsset(url: item.url)
         let videoTracks = try await asset.loadTracks(withMediaType: .video)
         guard let sourceVideoTrack = videoTracks.first else {
@@ -165,6 +322,7 @@ enum MediaExport {
         }
 
         let duration = try await asset.load(.duration)
+        let sourceTimeRange = trim?.timeRange(in: duration) ?? CMTimeRange(start: .zero, duration: duration)
         let naturalSize = try await sourceVideoTrack.load(.naturalSize)
         let preferredTransform = try await sourceVideoTrack.load(.preferredTransform)
         let transformedBounds = CGRect(origin: .zero, size: naturalSize)
@@ -184,10 +342,11 @@ enum MediaExport {
             throw MediaExportError.cannotCreateDestination
         }
         try compositionVideoTrack.insertTimeRange(
-            CMTimeRange(start: .zero, duration: duration),
+            sourceTimeRange,
             of: sourceVideoTrack,
             at: .zero
         )
+        compositionVideoTrack.preferredTransform = preferredTransform
 
         let audioTracks = try await asset.loadTracks(withMediaType: .audio)
         for audioTrack in audioTracks {
@@ -198,28 +357,34 @@ enum MediaExport {
                 continue
             }
             try? compositionAudioTrack.insertTimeRange(
-                CMTimeRange(start: .zero, duration: duration),
+                sourceTimeRange,
                 of: audioTrack,
                 at: .zero
             )
         }
 
-        let videoComposition = AVMutableVideoComposition()
-        videoComposition.renderSize = CGSize(width: even(cropRect.width), height: even(cropRect.height))
-        let frameRate = try await sourceVideoTrack.load(.nominalFrameRate)
-        videoComposition.frameDuration = CMTime(value: 1, timescale: CMTimeScale(max(frameRate.rounded(), 24)))
+        let videoComposition: AVMutableVideoComposition?
+        if crop.isFullFrame {
+            videoComposition = nil
+        } else {
+            let nextVideoComposition = AVMutableVideoComposition()
+            nextVideoComposition.renderSize = CGSize(width: even(cropRect.width), height: even(cropRect.height))
+            let frameRate = try await sourceVideoTrack.load(.nominalFrameRate)
+            nextVideoComposition.frameDuration = CMTime(value: 1, timescale: CMTimeScale(max(frameRate.rounded(), 24)))
 
-        let instruction = AVMutableVideoCompositionInstruction()
-        instruction.timeRange = CMTimeRange(start: .zero, duration: duration)
+            let instruction = AVMutableVideoCompositionInstruction()
+            instruction.timeRange = CMTimeRange(start: .zero, duration: sourceTimeRange.duration)
 
-        let layerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: compositionVideoTrack)
-        let translation = CGAffineTransform(
-            translationX: -transformedBounds.minX - cropRect.minX,
-            y: -transformedBounds.minY - cropRect.minY
-        )
-        layerInstruction.setTransform(preferredTransform.concatenating(translation), at: .zero)
-        instruction.layerInstructions = [layerInstruction]
-        videoComposition.instructions = [instruction]
+            let layerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: compositionVideoTrack)
+            let translation = CGAffineTransform(
+                translationX: -transformedBounds.minX - cropRect.minX,
+                y: -transformedBounds.minY - cropRect.minY
+            )
+            layerInstruction.setTransform(preferredTransform.concatenating(translation), at: .zero)
+            instruction.layerInstructions = [layerInstruction]
+            nextVideoComposition.instructions = [instruction]
+            videoComposition = nextVideoComposition
+        }
 
         guard let exportSession = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetHighestQuality) else {
             throw MediaExportError.cannotCreateDestination
@@ -243,6 +408,29 @@ enum MediaExport {
                 }
             }
         }
+    }
+
+    private static func editSuffix(for pinnedItem: PinnedMediaItem) -> String {
+        var parts: [String] = []
+        if pinnedItem.crop?.isFullFrame == false {
+            parts.append("cropped")
+        }
+        if pinnedItem.trim != nil {
+            parts.append("trimmed")
+        }
+        return parts.isEmpty ? "" : "-" + parts.joined(separator: "-")
+    }
+
+    private static func gifFrameDuration(source: CGImageSource, index: Int) -> TimeInterval {
+        guard let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any],
+              let gifProperties = properties[kCGImagePropertyGIFDictionary] as? [CFString: Any]
+        else {
+            return 0.1
+        }
+
+        let unclampedDelay = gifProperties[kCGImagePropertyGIFUnclampedDelayTime] as? TimeInterval
+        let delay = unclampedDelay ?? gifProperties[kCGImagePropertyGIFDelayTime] as? TimeInterval ?? 0.1
+        return max(0.02, delay)
     }
 
     private static func supportedRasterExtension(_ pathExtension: String) -> String {
@@ -274,6 +462,7 @@ enum MediaExport {
 enum MediaExportError: LocalizedError {
     case cannotLoadSource
     case invalidCrop
+    case invalidTrim
     case cannotCreateDestination
     case cannotFinalizeDestination
 
@@ -283,6 +472,8 @@ enum MediaExportError: LocalizedError {
             return "The source media could not be loaded."
         case .invalidCrop:
             return "The crop area is too small."
+        case .invalidTrim:
+            return "The trim range is too short."
         case .cannotCreateDestination:
             return "The destination file could not be created."
         case .cannotFinalizeDestination:

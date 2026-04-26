@@ -14,7 +14,11 @@ struct ContentView: View {
     @State private var thumbnailSelectionID: URL?
     @State private var isCopyingPinnedFiles = false
     @State private var isCropToolActive = false
+    @State private var isTrimToolActive = false
     @State private var cropRects: [URL: NormalizedCrop] = [:]
+    @State private var trimRanges: [URL: MediaTrim] = [:]
+    @State private var appliedCrops: [URL: NormalizedCrop] = [:]
+    @State private var appliedTrims: [URL: MediaTrim] = [:]
 
     private let initialFolderURL: URL?
     private let zoomLevels = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0]
@@ -60,6 +64,9 @@ struct ContentView: View {
                let selectedID = library.selectedID,
                visibleThumbnailEntries.contains(where: { $0.id == selectedID }) {
                 thumbnailSelectionID = selectedID
+            }
+            if selectedItem?.kind != .video && selectedItem?.kind != .gif {
+                isTrimToolActive = false
             }
         }
         .task(id: library.selectedID) {
@@ -419,8 +426,81 @@ struct ContentView: View {
     }
 
     private var selectedAppliedCrop: NormalizedCrop {
-        guard let selectedID = library.selectedID else { return .full }
-        return pinnedItems.first { $0.id == selectedID }?.crop ?? .full
+        guard let item = selectedItem else { return .full }
+        return appliedCrops[item.id]
+            ?? selectedPinnedItem?.crop
+            ?? pinnedItems.first { $0.id == item.id }?.crop
+            ?? .full
+    }
+
+    private var selectedCanTrim: Bool {
+        guard let item = selectedItem,
+              item.kind == .video || item.kind == .gif,
+              let duration = selectedStatus.duration
+        else {
+            return false
+        }
+        return duration > MediaTrim.minimumDuration
+    }
+
+    private var selectedTrim: MediaTrim {
+        guard let item = selectedItem,
+              let duration = selectedStatus.duration
+        else {
+            return .full(duration: 0)
+        }
+
+        return (trimRanges[item.id]
+            ?? appliedTrims[item.id]
+            ?? pinnedItems.first { $0.id == item.id }?.trim
+            ?? .full(duration: duration))
+            .clamped(to: duration)
+    }
+
+    private var selectedAppliedTrim: MediaTrim? {
+        guard let item = selectedItem,
+              let duration = selectedStatus.duration,
+              let trim = (appliedTrims[item.id]
+                ?? selectedPinnedItem?.trim
+                ?? pinnedItems.first { $0.id == item.id }?.trim)?
+                    .clamped(to: duration),
+              !trim.isFullLength(for: duration)
+        else {
+            return nil
+        }
+
+        return trim
+    }
+
+    private var hasSelectedAppliedEdits: Bool {
+        !selectedAppliedCrop.isFullFrame || selectedAppliedTrim != nil
+    }
+
+    private var hasSelectedPendingOrAppliedEdits: Bool {
+        guard selectedItem != nil else { return false }
+        return !selectedCrop.isFullFrame
+            || !selectedAppliedCrop.isFullFrame
+            || !selectedTrim.isFullLength(for: selectedStatus.duration)
+            || selectedAppliedTrim != nil
+    }
+
+    private var applyEditIsDisabled: Bool {
+        if isTrimToolActive {
+            return !selectedCanTrim || selectedTrim.isFullLength(for: selectedStatus.duration)
+        }
+
+        return selectedItem == nil || selectedCrop.isFullFrame || !isCropToolActive
+    }
+
+    private var editSummaryLabel: String {
+        var parts: [String] = []
+        if !selectedCrop.isFullFrame {
+            parts.append(selectedCrop.displayLabel)
+        }
+        if !selectedTrim.isFullLength(for: selectedStatus.duration) {
+            parts.append(selectedTrim.displayLabel)
+        }
+        return parts.joined(separator: "  ")
     }
 
     private var mainPanel: some View {
@@ -491,16 +571,75 @@ struct ContentView: View {
                 .padding(.horizontal, 3)
 
             Button {
-                applySelectedCrop()
+                isTrimToolActive.toggle()
+                if isTrimToolActive {
+                    isCropToolActive = false
+                    prepareSelectedTrimDraft()
+                }
+            } label: {
+                Image(systemName: "timeline.selection")
+                    .font(.system(size: 14, weight: .medium))
+                    .frame(width: 28, height: 26)
+            }
+            .buttonStyle(.plain)
+            .disabled(!selectedCanTrim)
+            .foregroundStyle(isTrimToolActive ? Color.accentColor : Color.primary)
+            .help("Trim Tool")
+            .accessibilityLabel("Trim Tool")
+
+            Button {
+                clearSelectedTrim()
+            } label: {
+                Image(systemName: "gobackward")
+                    .font(.system(size: 13, weight: .medium))
+                    .frame(width: 28, height: 26)
+            }
+            .buttonStyle(.plain)
+            .disabled(!selectedCanTrim || selectedTrim.isFullLength(for: selectedStatus.duration))
+            .help("Reset Trim")
+            .accessibilityLabel("Reset Trim")
+
+            if isTrimToolActive, selectedCanTrim, let duration = selectedStatus.duration {
+                TrimControls(
+                    trim: trimBinding(for: selectedItem, duration: duration),
+                    duration: duration,
+                    onApply: applySelectedTrim
+                )
+                .frame(width: 360)
+                .help("Trim Range")
+            }
+
+            Button {
+                undoSelectedEdits()
+            } label: {
+                Image(systemName: "arrow.uturn.backward")
+                    .font(.system(size: 13, weight: .medium))
+                    .frame(width: 28, height: 26)
+            }
+            .buttonStyle(.plain)
+            .disabled(!hasSelectedPendingOrAppliedEdits)
+            .help("Undo Edits")
+            .accessibilityLabel("Undo Edits")
+
+            Divider()
+                .frame(height: 18)
+                .padding(.horizontal, 3)
+
+            Button {
+                if isTrimToolActive {
+                    applySelectedTrim()
+                } else {
+                    applySelectedCrop()
+                }
             } label: {
                 Image(systemName: "checkmark")
                     .font(.system(size: 14, weight: .medium))
                     .frame(width: 28, height: 26)
             }
             .buttonStyle(.plain)
-            .disabled(selectedItem == nil || selectedCrop.isFullFrame || !isCropToolActive)
-            .help("Apply Crop")
-            .accessibilityLabel("Apply Crop")
+            .disabled(applyEditIsDisabled)
+            .help(isTrimToolActive ? "Apply Trim" : "Apply Crop")
+            .accessibilityLabel(isTrimToolActive ? "Apply Trim" : "Apply Crop")
 
             Button {
                 pinEditedSelectedItem()
@@ -510,16 +649,17 @@ struct ContentView: View {
                     .frame(width: 28, height: 26)
             }
             .buttonStyle(.plain)
-            .disabled(selectedItem == nil || selectedAppliedCrop.isFullFrame)
+            .disabled(selectedItem == nil || !hasSelectedAppliedEdits)
             .help("Move Edited Media to Pinned")
             .accessibilityLabel("Move Edited Media to Pinned")
 
-            if !selectedCrop.isFullFrame {
-                Text(selectedCrop.displayLabel)
+            if !selectedCrop.isFullFrame || !selectedTrim.isFullLength(for: selectedStatus.duration) {
+                Text(editSummaryLabel)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .padding(.leading, 4)
+                    .help("Current Edit Summary")
             }
 
             Spacer(minLength: 0)
@@ -542,6 +682,7 @@ struct ContentView: View {
                     zoomMultiplier: zoomLevels[zoomIndex],
                     isCropToolActive: isCropToolActive,
                     appliedCrop: selectedAppliedCrop,
+                    appliedTrim: selectedAppliedTrim,
                     onApplyCrop: applySelectedCrop,
                     crop: cropBinding(for: item)
                 )
@@ -616,6 +757,24 @@ struct ContentView: View {
     }
 
     private func handleKeyDown(_ event: NSEvent) -> Bool {
+        if selectedCanTrim,
+           isTrimToolActive || !selectedTrim.isFullLength(for: selectedStatus.duration) {
+            switch event.keyCode {
+            case 36, 76:
+                DispatchQueue.main.async {
+                    applySelectedTrim()
+                }
+                return true
+            case 53:
+                DispatchQueue.main.async {
+                    clearSelectedTrim()
+                }
+                return true
+            default:
+                break
+            }
+        }
+
         if selectedItem != nil,
            isCropToolActive || !selectedCrop.isFullFrame {
             switch event.keyCode {
@@ -642,6 +801,9 @@ struct ContentView: View {
 
         if event.modifierFlags.contains(.command) {
             switch event.charactersIgnoringModifiers {
+            case "z":
+                undoSelectedEdits()
+                return true
             case "+", "=":
                 zoomIn()
                 return true
@@ -687,6 +849,20 @@ struct ContentView: View {
         }
     }
 
+    private func trimBinding(for item: MediaItem?, duration: TimeInterval) -> Binding<MediaTrim> {
+        Binding {
+            guard let item else { return .full(duration: duration) }
+            return (trimRanges[item.id]
+                ?? appliedTrims[item.id]
+                ?? pinnedItems.first { $0.id == item.id }?.trim
+                ?? .full(duration: duration))
+                .clamped(to: duration)
+        } set: { newValue in
+            guard let item else { return }
+            trimRanges[item.id] = newValue.clamped(to: duration)
+        }
+    }
+
     private func applyCropPreset(width: CGFloat, height: CGFloat) {
         guard let item = selectedItem else { return }
         let naturalSize = selectedStatus.size ?? CGSize(width: width, height: height)
@@ -695,11 +871,13 @@ struct ContentView: View {
             naturalSize: naturalSize
         )
         isCropToolActive = true
+        isTrimToolActive = false
     }
 
     private func clearSelectedCrop() {
         guard let item = selectedItem else { return }
         cropRects[item.id] = .full
+        appliedCrops[item.id] = nil
         if let index = pinnedItems.firstIndex(where: { $0.id == item.id }) {
             pinnedItems[index].crop = nil
         }
@@ -710,16 +888,71 @@ struct ContentView: View {
         guard let item = selectedItem else { return }
         let crop = selectedCrop.clamped()
         guard !crop.isFullFrame else { return }
-        pin(item, crop: crop)
+        appliedCrops[item.id] = crop
         cropRects[item.id] = crop
         isCropToolActive = false
+    }
+
+    private func prepareSelectedTrimDraft() {
+        guard let item = selectedItem,
+              let duration = selectedStatus.duration
+        else {
+            return
+        }
+
+        trimRanges[item.id] = selectedTrim.clamped(to: duration)
+    }
+
+    private func clearSelectedTrim() {
+        guard let item = selectedItem,
+              let duration = selectedStatus.duration
+        else {
+            return
+        }
+
+        trimRanges[item.id] = .full(duration: duration)
+        appliedTrims[item.id] = nil
+        if let index = pinnedItems.firstIndex(where: { $0.id == item.id }) {
+            pinnedItems[index].trim = nil
+        }
+        isTrimToolActive = false
+    }
+
+    private func applySelectedTrim() {
+        guard let item = selectedItem,
+              let duration = selectedStatus.duration
+        else {
+            return
+        }
+
+        let trim = selectedTrim.clamped(to: duration)
+        guard !trim.isFullLength(for: duration) else { return }
+        appliedTrims[item.id] = trim
+        trimRanges[item.id] = trim
+        isTrimToolActive = false
+    }
+
+    private func undoSelectedEdits() {
+        guard let item = selectedItem else { return }
+
+        cropRects[item.id] = .full
+        trimRanges[item.id] = selectedStatus.duration.map(MediaTrim.full(duration:))
+        appliedCrops[item.id] = nil
+        appliedTrims[item.id] = nil
+        if let index = pinnedItems.firstIndex(where: { $0.id == item.id }) {
+            pinnedItems[index].crop = nil
+            pinnedItems[index].trim = nil
+        }
+        isCropToolActive = false
+        isTrimToolActive = false
     }
 
     private func pinEditedSelectedItem() {
         guard let item = selectedItem else { return }
         let crop = selectedAppliedCrop.clamped()
-        guard !crop.isFullFrame else { return }
-        pin(item, crop: crop)
+        let trim = selectedAppliedTrim
+        guard !crop.isFullFrame || trim != nil else { return }
+        pin(item, crop: crop, trim: trim)
         activePanel = .pinned
         library.selectedID = item.id
     }
@@ -823,18 +1056,31 @@ struct ContentView: View {
         library.selectedID = pinnedItems.first?.id
     }
 
-    private func pin(_ item: MediaItem, crop: NormalizedCrop? = nil) {
+    private func pin(_ item: MediaItem, crop: NormalizedCrop? = nil, trim: MediaTrim? = nil) {
         let normalizedCrop = crop?.clamped()
+        let normalizedTrim: MediaTrim?
+        if let trim,
+           let duration = selectedStatus.duration,
+           !trim.isFullLength(for: duration) {
+            normalizedTrim = trim.clamped(to: duration)
+        } else {
+            normalizedTrim = nil
+        }
+
         if let index = pinnedItems.firstIndex(where: { $0.id == item.id }) {
             if let normalizedCrop, !normalizedCrop.isFullFrame {
                 pinnedItems[index].crop = normalizedCrop
+            }
+            if let normalizedTrim {
+                pinnedItems[index].trim = normalizedTrim
             }
             return
         }
 
         pinnedItems.append(PinnedMediaItem(
             item: item,
-            crop: normalizedCrop?.isFullFrame == false ? normalizedCrop : nil
+            crop: normalizedCrop?.isFullFrame == false ? normalizedCrop : nil,
+            trim: normalizedTrim
         ))
         if let thumbnail = library.thumbnails[item.url] {
             pinnedThumbnails[item.url] = thumbnail
@@ -1047,6 +1293,178 @@ private struct PinnedCopyResult: Sendable {
     let failures: [String]
 }
 
+private struct TrimControls: View {
+    @Binding var trim: MediaTrim
+    let duration: TimeInterval
+    let onApply: () -> Void
+
+    @State private var startText = ""
+    @State private var endText = ""
+
+    var body: some View {
+        HStack(spacing: 6) {
+            TrimRangeSlider(trim: $trim, duration: duration)
+                .frame(width: 150, height: 24)
+                .help("Drag to Set Trim Start and End")
+                .accessibilityLabel("Trim Range")
+
+            TextField("Start", text: $startText)
+                .font(.caption.monospacedDigit())
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 58)
+                .onSubmit(commitTextFields)
+                .help("Trim Start Time")
+                .accessibilityLabel("Trim Start Time")
+
+            TextField("End", text: $endText)
+                .font(.caption.monospacedDigit())
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 58)
+                .onSubmit(commitTextFields)
+                .help("Trim End Time")
+                .accessibilityLabel("Trim End Time")
+
+            Button {
+                commitTextFields()
+                onApply()
+            } label: {
+                Image(systemName: "checkmark.circle")
+                    .font(.system(size: 14, weight: .medium))
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.plain)
+            .disabled(trim.isFullLength(for: duration))
+            .help("Apply Trim")
+            .accessibilityLabel("Apply Trim")
+        }
+        .onAppear(perform: syncTextFields)
+        .onChange(of: trim) {
+            syncTextFields()
+        }
+        .onChange(of: duration) {
+            trim = trim.clamped(to: duration)
+            syncTextFields()
+        }
+    }
+
+    private func syncTextFields() {
+        let clamped = trim.clamped(to: duration)
+        startText = MediaTrim.format(clamped.start)
+        endText = MediaTrim.format(clamped.end)
+    }
+
+    private func commitTextFields() {
+        let current = trim.clamped(to: duration)
+        let nextStart = parseTime(startText) ?? current.start
+        let nextEnd = parseTime(endText) ?? current.end
+        trim = MediaTrim(start: nextStart, end: nextEnd).clamped(to: duration)
+        syncTextFields()
+    }
+
+    private func parseTime(_ text: String) -> TimeInterval? {
+        let parts = text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(separator: ":")
+            .map(String.init)
+
+        guard !parts.isEmpty else { return nil }
+        if parts.count == 1 {
+            return TimeInterval(parts[0])
+        }
+        if parts.count == 2,
+           let minutes = TimeInterval(parts[0]),
+           let seconds = TimeInterval(parts[1]) {
+            return minutes * 60 + seconds
+        }
+        if parts.count == 3,
+           let hours = TimeInterval(parts[0]),
+           let minutes = TimeInterval(parts[1]),
+           let seconds = TimeInterval(parts[2]) {
+            return hours * 3600 + minutes * 60 + seconds
+        }
+        return nil
+    }
+}
+
+private struct TrimRangeSlider: View {
+    @Binding var trim: MediaTrim
+    let duration: TimeInterval
+
+    @State private var activeHandle: TrimHandle?
+
+    var body: some View {
+        GeometryReader { geometry in
+            let size = geometry.size
+            let handleSize: CGFloat = 12
+            let trackWidth = max(size.width - handleSize, 1)
+            let clamped = trim.clamped(to: duration)
+            let startX = xPosition(for: clamped.start, width: trackWidth, handleSize: handleSize)
+            let endX = xPosition(for: clamped.end, width: trackWidth, handleSize: handleSize)
+
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color.secondary.opacity(0.28))
+                    .frame(height: 4)
+                    .position(x: size.width / 2, y: size.height / 2)
+
+                Capsule()
+                    .fill(Color.accentColor.opacity(0.75))
+                    .frame(width: max(endX - startX, 2), height: 4)
+                    .position(x: (startX + endX) / 2, y: size.height / 2)
+
+                Circle()
+                    .fill(activeHandle == .start ? Color.accentColor : Color(nsColor: .controlBackgroundColor))
+                    .stroke(Color.accentColor, lineWidth: 1.5)
+                    .frame(width: handleSize, height: handleSize)
+                    .position(x: startX, y: size.height / 2)
+
+                Circle()
+                    .fill(activeHandle == .end ? Color.accentColor : Color(nsColor: .controlBackgroundColor))
+                    .stroke(Color.accentColor, lineWidth: 1.5)
+                    .frame(width: handleSize, height: handleSize)
+                    .position(x: endX, y: size.height / 2)
+            }
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        let seconds = seconds(for: value.location.x, width: trackWidth, handleSize: handleSize)
+                        if activeHandle == nil {
+                            activeHandle = abs(seconds - clamped.start) <= abs(seconds - clamped.end) ? .start : .end
+                        }
+
+                        switch activeHandle {
+                        case .start:
+                            trim = MediaTrim(start: seconds, end: clamped.end).clamped(to: duration)
+                        case .end:
+                            trim = MediaTrim(start: clamped.start, end: seconds).clamped(to: duration)
+                        case nil:
+                            break
+                        }
+                    }
+                    .onEnded { _ in
+                        activeHandle = nil
+                    }
+            )
+        }
+    }
+
+    private func xPosition(for seconds: TimeInterval, width: CGFloat, handleSize: CGFloat) -> CGFloat {
+        let percent = duration > 0 ? min(max(seconds / duration, 0), 1) : 0
+        return handleSize / 2 + CGFloat(percent) * width
+    }
+
+    private func seconds(for xPosition: CGFloat, width: CGFloat, handleSize: CGFloat) -> TimeInterval {
+        let percent = min(max((xPosition - handleSize / 2) / width, 0), 1)
+        return TimeInterval(percent) * duration
+    }
+
+    private enum TrimHandle {
+        case start
+        case end
+    }
+}
+
 private func uniqueCopyURL(fileName sourceFileName: String, in destinationURL: URL, reservedNames: inout Set<String>) -> URL {
     let fileManager = FileManager.default
     let sourceURL = URL(fileURLWithPath: sourceFileName)
@@ -1197,6 +1615,7 @@ struct PreviewPane: View {
     let zoomMultiplier: Double
     let isCropToolActive: Bool
     let appliedCrop: NormalizedCrop
+    let appliedTrim: MediaTrim?
     let onApplyCrop: () -> Void
     @Binding var crop: NormalizedCrop
 
@@ -1250,7 +1669,8 @@ struct PreviewPane: View {
                     NativeVideoView(
                         url: item.url,
                         crop: displayCrop,
-                        displaySize: naturalSize
+                        displaySize: naturalSize,
+                        trim: appliedTrim
                     )
                     .frame(width: mediaSize.width, height: mediaSize.height)
                 } else {
@@ -1273,11 +1693,11 @@ struct PreviewPane: View {
         case .image:
             StaticImagePreview(url: item.url)
         case .gif:
-            NativeImageView(url: item.url, animates: true)
+            NativeGIFImageView(url: item.url, trim: appliedTrim)
         case .webp:
             NativeWebImageView(url: item.url)
         case .video:
-            NativeVideoView(url: item.url, crop: .full, displaySize: nil)
+            NativeVideoView(url: item.url, crop: .full, displaySize: nil, trim: appliedTrim)
         }
     }
 
