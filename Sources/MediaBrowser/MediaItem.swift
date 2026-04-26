@@ -17,12 +17,7 @@ enum MediaKind: String, CaseIterable, Sendable {
     }
 
     var shouldUpscaleToFit: Bool {
-        switch self {
-        case .gif, .webp:
-            return true
-        case .image, .video:
-            return false
-        }
+        true
     }
 }
 

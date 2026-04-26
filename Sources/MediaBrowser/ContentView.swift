@@ -161,6 +161,17 @@ struct ContentView: View {
                     .accessibilityLabel("Copy Pinned Files")
                 }
 
+                Button {
+                    clearPinnedItems()
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 15, weight: .medium))
+                        .frame(width: 24, height: 24)
+                }
+                .buttonStyle(.plain)
+                .help("Clear Pinned Files")
+                .accessibilityLabel("Clear Pinned Files")
+
                 Text("\(pinnedItems.count)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -451,6 +462,12 @@ struct ContentView: View {
     }
 
     private func handleKeyDown(_ event: NSEvent) -> Bool {
+        if event.modifierFlags.contains(.control),
+           event.charactersIgnoringModifiers?.lowercased() == "p" {
+            pinActiveThumbnailOrPreview()
+            return true
+        }
+
         if event.modifierFlags.contains(.command) {
             switch event.charactersIgnoringModifiers {
             case "+", "=":
@@ -597,6 +614,20 @@ struct ContentView: View {
         }
     }
 
+    private func pinActiveThumbnailOrPreview() {
+        guard activePanel == .thumbnail else { return }
+
+        if let thumbnailSelectionID,
+           let item = visibleThumbnailEntries.first(where: { $0.id == thumbnailSelectionID })?.item {
+            pin(item)
+            return
+        }
+
+        if let selectedItem {
+            pin(selectedItem)
+        }
+    }
+
     private func unpin(_ item: MediaItem) {
         pinnedItems.removeAll { $0.id == item.id }
         pinnedThumbnails[item.url] = nil
@@ -607,6 +638,22 @@ struct ContentView: View {
                 library.selectedID = visibleItems.first?.id
             }
         }
+    }
+
+    private func clearPinnedItems() {
+        let removedIDs = Set(pinnedItems.map(\.id))
+        pinnedItems.removeAll()
+        pinnedThumbnails.removeAll()
+        activePanel = .thumbnail
+
+        guard let selectedID = library.selectedID,
+              removedIDs.contains(selectedID),
+              !visibleItems.contains(where: { $0.id == selectedID })
+        else {
+            return
+        }
+
+        library.selectedID = visibleItems.first?.id
     }
 
     private func pinMenuTitle(for item: MediaItem) -> String {
