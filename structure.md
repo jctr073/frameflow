@@ -56,14 +56,22 @@ ContentView
    │  │     │  ├─ Media / Music / Text / Transitions / Movement tabs
    │  │     │  └─ EditorClipCard grid
    │  │     ├─ playerPane
-   │  │     │  ├─ selected clip header
+   │  │     │  ├─ selected media-bin or timeline clip header
    │  │     │  └─ PreviewPane
    │  │     └─ timelinePane
-   │  │        ├─ disabled phase-1 timeline toolbar
+   │  │        ├─ timeline toolbar
+   │  │        │  ├─ Reset Timeline Trim
+   │  │        │  ├─ Split Clip
+   │  │        │  ├─ Snap toggle
+   │  │        │  ├─ Delete Timeline Clip
+   │  │        │  └─ Timeline Zoom slider
    │  │        ├─ timelineRuler
-   │  │        ├─ Video track
-   │  │        │  └─ TimelineClipBlock
-   │  │        └─ Audio track
+   │  │        ├─ Video track drop target
+   │  │        │  └─ TimelineClipBlock list
+   │  │        │     ├─ selected playhead indicator
+   │  │        │     ├─ trim start handle
+   │  │        │     └─ trim end handle
+   │  │        └─ Audio track placeholder
    │  │
    │  └─ pinnedPanel
    │     ├─ Pinned header toolbar
@@ -120,9 +128,22 @@ enum MainPanelTab {
 }
 ```
 
-The video editor clip list is owned by `ContentView` as `editorClips`. Clips are added from
-`thumbnailPanel` through the thumbnail context menu's `Add to Clips` action or the
-`Control+C` keyboard shortcut.
+The video editor media-bin clip list is owned by `ContentView` as `editorClips`. Clips are
+added from `thumbnailPanel` through the thumbnail context menu's `Add to Clips` action or
+the `Control+C` keyboard shortcut.
+
+Timeline clip instances are owned separately as `timelineClips`. Dragging an
+`EditorClipCard` from `clipsPane` into `timelinePane`, or choosing `Add to Timeline` from
+the clip context menu, creates a new `EditorTimelineClip` with its own UUID so the same
+media-bin clip can appear on the timeline more than once. `selectedTimelineClipID` drives
+timeline block highlighting, player preview selection, and the playhead indicator in the
+selected `TimelineClipBlock`.
+
+Each `EditorTimelineClip` may also carry its own `MediaTrim`. Timeline trim handles update
+that per-instance trim, the player previews the selected timeline trim, and Split Clip
+creates two timeline instances split at the current player time. `isTimelineSnappingEnabled`
+snaps trim and split times to half-second increments, and `timelineZoom` controls timeline
+clip width and ruler scale without changing media timing.
 
 ## Code Anchors
 
