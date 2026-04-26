@@ -4,12 +4,17 @@ import UniformTypeIdentifiers
 
 struct ContentView: View {
     @StateObject private var library = MediaLibrary()
+    @ObservedObject private var mainPanelState: MainPanelState
     @State private var isDropTargeted = false
     @State private var zoomIndex = 3
     @State private var filterText = ""
     @State private var selectedStatus = MediaStatus(size: nil, duration: nil)
     @State private var pinnedItems: [PinnedMediaItem] = []
     @State private var pinnedThumbnails: [URL: NSImage] = [:]
+    @State private var editorClips: [EditorClip] = []
+    @State private var selectedEditorClipID: EditorClip.ID?
+    @State private var editorMediaCategory: EditorMediaCategory = .media
+    @State private var editorPlayerTime: TimeInterval = 0
     @State private var activePanel: SidePanel = .thumbnail
     @State private var thumbnailSelectionID: URL?
     @State private var isCopyingPinnedFiles = false
@@ -27,8 +32,9 @@ struct ContentView: View {
     private let sidePanelRowInsets = EdgeInsets(top: 8, leading: 18, bottom: 8, trailing: 18)
     private let topToolbarHeight: CGFloat = 48
 
-    init(initialFolderURL: URL?) {
+    init(initialFolderURL: URL?, mainPanelState: MainPanelState) {
         self.initialFolderURL = initialFolderURL
+        self.mainPanelState = mainPanelState
     }
 
     var body: some View {
@@ -87,6 +93,9 @@ struct ContentView: View {
                 activePanel = .thumbnail
             }
         }
+        .onChange(of: selectedEditorClipID) {
+            editorPlayerTime = 0
+        }
     }
 
     private var thumbnailPanel: some View {
@@ -133,6 +142,10 @@ struct ContentView: View {
                                     library.selectedID = itemEntry.item.id
                                 }
                                 .contextMenu {
+                                    Button(editorClipMenuTitle(for: itemEntry.item)) {
+                                        addToEditorClips(itemEntry.item)
+                                    }
+
                                     Button(pinMenuTitle(for: itemEntry.item)) {
                                         pin(itemEntry.item)
                                     }
@@ -422,6 +435,19 @@ struct ContentView: View {
         return pinnedItems.first { $0.id == selectedID }
     }
 
+    private var selectedEditorClip: EditorClip? {
+        if let selectedEditorClipID,
+           let clip = editorClips.first(where: { $0.id == selectedEditorClipID }) {
+            return clip
+        }
+
+        return editorClips.first
+    }
+
+    private var visibleEditorTabs: [MainPanelTab] {
+        [.preview, .videoEditor].filter { mainPanelState.isVisible($0) }
+    }
+
     private var selectedCrop: NormalizedCrop {
         guard let selectedItem else { return .full }
         return cropRects[selectedItem.id]
@@ -520,8 +546,364 @@ struct ContentView: View {
 
     private var mainPanel: some View {
         VStack(spacing: 0) {
+            if visibleEditorTabs.count > 1 {
+                mainPanelTabBar
+            }
+
+            activeMainPanelContent
+        }
+    }
+
+    private var mainPanelTabBar: some View {
+        HStack(spacing: 6) {
+            ForEach(visibleEditorTabs) { tab in
+                let isActive = mainPanelState.activeTab == tab
+                Button {
+                    mainPanelState.activate(tab)
+                } label: {
+                    Label(tab.title, systemImage: tab.systemImage)
+                        .font(.caption.weight(.semibold))
+                        .labelStyle(.titleAndIcon)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .frame(minWidth: 92)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(isActive ? Color.accentColor.opacity(0.16) : Color.clear)
+                        )
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(isActive ? Color.accentColor : Color.primary)
+                .accessibilityLabel(tab.title)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .frame(height: 36)
+        .padding(.horizontal, 10)
+        .background(.bar)
+        .overlay(alignment: .bottom) {
+            Divider()
+        }
+    }
+
+    @ViewBuilder
+    private var activeMainPanelContent: some View {
+        switch mainPanelState.activeTab {
+        case .preview:
+            previewMainPanel
+        case .videoEditor:
+            videoEditorPanel
+        }
+    }
+
+    private var previewMainPanel: some View {
+        VStack(spacing: 0) {
             editingToolbar
             previewPanel
+        }
+    }
+
+    private var videoEditorPanel: some View {
+        VSplitView {
+            HSplitView {
+                clipsPane
+                    .frame(minWidth: 190, idealWidth: 230, maxWidth: 320)
+
+                playerPane
+                    .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .frame(minHeight: 280, maxHeight: .infinity)
+
+            timelinePane
+                .frame(minHeight: 128, idealHeight: 170, maxHeight: 260)
+        }
+        .background(Color(nsColor: .underPageBackgroundColor))
+    }
+
+    private var clipsPane: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Text("Clips")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                Button {
+                    importEditorClips()
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 13, weight: .semibold))
+                        .frame(width: 24, height: 24)
+                }
+                .buttonStyle(.plain)
+                .quickTooltip("Import Clips")
+                .accessibilityLabel("Import Clips")
+            }
+            .frame(height: topToolbarHeight)
+            .padding(.horizontal, 10)
+            .background(.bar)
+            .overlay(alignment: .bottom) {
+                Divider()
+            }
+
+            HStack(spacing: 4) {
+                ForEach(EditorMediaCategory.allCases) { category in
+                    Button {
+                        editorMediaCategory = category
+                    } label: {
+                        VStack(spacing: 3) {
+                            Image(systemName: category.systemImage)
+                                .font(.system(size: 13, weight: .semibold))
+                                .frame(width: 18, height: 18)
+
+                            Text(category.title)
+                                .font(.system(size: 9, weight: .semibold))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.75)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 7)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(editorMediaCategory == category ? Color.accentColor.opacity(0.16) : Color.clear)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(editorMediaCategory == category ? Color.accentColor : Color.secondary)
+                    .quickTooltip(category.title)
+                    .accessibilityLabel(category.title)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 8)
+            .overlay(alignment: .bottom) {
+                Divider()
+            }
+
+            if visibleEditorClips.isEmpty {
+                Text(editorMediaCategory.emptyMessage)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding()
+            } else {
+                ScrollView {
+                    LazyVGrid(
+                        columns: [GridItem(.adaptive(minimum: 94, maximum: 132), spacing: 10)],
+                        spacing: 12
+                    ) {
+                        ForEach(visibleEditorClips) { clip in
+                            Button {
+                                selectedEditorClipID = clip.id
+                            } label: {
+                                EditorClipCard(
+                                    clip: clip,
+                                    thumbnail: editorClipThumbnail(for: clip),
+                                    isSelected: selectedEditorClipID == clip.id
+                                )
+                            }
+                            .buttonStyle(.plain)
+                            .contextMenu {
+                                Button("Remove from Clips") {
+                                    removeEditorClip(clip)
+                                }
+                            }
+                            .task(id: clip.id) {
+                                await loadEditorClipMetadataIfNeeded(for: clip)
+                            }
+                        }
+                    }
+                    .padding(10)
+                }
+            }
+        }
+        .background(Color(nsColor: .controlBackgroundColor))
+    }
+
+    private var visibleEditorClips: [EditorClip] {
+        switch editorMediaCategory {
+        case .media:
+            return editorClips
+        case .music, .text, .transitions, .movement:
+            return []
+        }
+    }
+
+    private var playerPane: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Text(selectedEditorClip?.item.fileName ?? "No Clip")
+                    .font(.headline)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                if let clip = selectedEditorClip,
+                   let duration = clip.status?.duration {
+                    Text("\(MediaTrim.format(editorPlayerTime)) / \(MediaTrim.format(duration))")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            .frame(height: topToolbarHeight)
+            .padding(.horizontal, 12)
+            .background(.bar)
+            .overlay(alignment: .bottom) {
+                Divider()
+            }
+
+            ZStack {
+                Color.black.opacity(0.92)
+
+                if let clip = selectedEditorClip {
+                    PreviewPane(
+                        item: clip.item,
+                        zoomMultiplier: 1,
+                        isCropToolActive: false,
+                        appliedCrop: .full,
+                        appliedTrim: nil,
+                        onApplyCrop: { },
+                        onVideoTimeChange: { editorPlayerTime = $0 },
+                        crop: .constant(.full)
+                    )
+                    .id(clip.id)
+                } else {
+                    Text("No clips added.")
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .background(Color(nsColor: .underPageBackgroundColor))
+    }
+
+    private var timelinePane: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Button { } label: {
+                    Image(systemName: "arrow.uturn.backward")
+                        .font(.system(size: 13, weight: .medium))
+                        .frame(width: 24, height: 24)
+                }
+                .buttonStyle(.plain)
+                .disabled(true)
+                .quickTooltip("Undo Timeline Edit")
+                .accessibilityLabel("Undo Timeline Edit")
+
+                Button { } label: {
+                    Image(systemName: "scissors")
+                        .font(.system(size: 13, weight: .medium))
+                        .frame(width: 24, height: 24)
+                }
+                .buttonStyle(.plain)
+                .disabled(true)
+                .quickTooltip("Split Clip")
+                .accessibilityLabel("Split Clip")
+
+                Button { } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 13, weight: .medium))
+                        .frame(width: 24, height: 24)
+                }
+                .buttonStyle(.plain)
+                .disabled(true)
+                .quickTooltip("Delete Timeline Clip")
+                .accessibilityLabel("Delete Timeline Clip")
+
+                Spacer(minLength: 0)
+
+                Text("Timeline")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(height: 36)
+            .padding(.horizontal, 10)
+            .background(.bar)
+            .overlay(alignment: .bottom) {
+                Divider()
+            }
+
+            timelineRuler
+                .frame(height: 24)
+
+            VStack(spacing: 0) {
+                timelineTrackRow(title: "Video", systemImage: "film", clips: editorClips)
+                Divider()
+                timelineTrackRow(title: "Audio", systemImage: "speaker.wave.2", clips: [])
+            }
+            .frame(maxHeight: .infinity)
+        }
+        .background(Color(nsColor: .textBackgroundColor))
+    }
+
+    private var timelineRuler: some View {
+        GeometryReader { geometry in
+            let markerCount = 6
+            HStack(spacing: 0) {
+                ForEach(0..<markerCount, id: \.self) { marker in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Rectangle()
+                            .fill(Color.secondary.opacity(0.45))
+                            .frame(width: 1, height: 7)
+
+                        Text(MediaTrim.format(TimeInterval(marker * 30)))
+                            .font(.system(size: 9, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(width: max(geometry.size.width / CGFloat(markerCount), 60), alignment: .leading)
+                }
+            }
+            .padding(.leading, 84)
+        }
+        .background(Color(nsColor: .controlBackgroundColor))
+        .overlay(alignment: .bottom) {
+            Divider()
+        }
+    }
+
+    private func timelineTrackRow(title: String, systemImage: String, clips: [EditorClip]) -> some View {
+        HStack(spacing: 0) {
+            HStack(spacing: 7) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 13, weight: .semibold))
+                    .frame(width: 18)
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(.secondary)
+            .frame(width: 84, alignment: .leading)
+            .frame(maxHeight: .infinity)
+            .padding(.horizontal, 10)
+            .background(Color(nsColor: .controlBackgroundColor))
+            .overlay(alignment: .trailing) {
+                Divider()
+            }
+
+            ScrollView(.horizontal) {
+                HStack(spacing: 6) {
+                    ForEach(clips) { clip in
+                        Button {
+                            selectedEditorClipID = clip.id
+                        } label: {
+                            TimelineClipBlock(
+                                clip: clip,
+                                thumbnail: editorClipThumbnail(for: clip),
+                                isSelected: selectedEditorClipID == clip.id
+                            )
+                            .frame(width: timelineClipWidth(for: clip))
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .frame(maxHeight: .infinity, alignment: .leading)
+            }
         }
     }
 
@@ -827,6 +1209,11 @@ struct ContentView: View {
         }
 
         if event.modifierFlags.contains(.control),
+           event.charactersIgnoringModifiers?.lowercased() == "c" {
+            return addActiveThumbnailToEditorClips()
+        }
+
+        if event.modifierFlags.contains(.control),
            event.charactersIgnoringModifiers?.lowercased() == "p" {
             pinActiveThumbnailOrPreview()
             return true
@@ -1089,6 +1476,103 @@ struct ContentView: View {
         library.selectedID = pinnedItems.first?.id
     }
 
+    private func addToEditorClips(_ item: MediaItem) {
+        if editorClips.contains(where: { $0.id == item.id }) {
+            selectedEditorClipID = item.id
+        } else {
+            editorClips.append(EditorClip(
+                item: item,
+                thumbnail: library.thumbnails[item.url],
+                status: item.id == selectedItem?.id ? selectedStatus : nil
+            ))
+            selectedEditorClipID = item.id
+        }
+
+        mainPanelState.show(.videoEditor)
+    }
+
+    private func addActiveThumbnailToEditorClips() -> Bool {
+        guard let item = activeThumbnailItem() else {
+            return false
+        }
+
+        addToEditorClips(item)
+        return true
+    }
+
+    private func activeThumbnailItem() -> MediaItem? {
+        guard activePanel == .thumbnail else {
+            return nil
+        }
+
+        if let thumbnailSelectionID,
+           let item = visibleThumbnailEntries.first(where: { $0.id == thumbnailSelectionID })?.item {
+            return item
+        }
+
+        return thumbnailSelectionID == nil ? selectedItem : nil
+    }
+
+    private func removeEditorClip(_ clip: EditorClip) {
+        editorClips.removeAll { $0.id == clip.id }
+        if selectedEditorClipID == clip.id {
+            selectedEditorClipID = editorClips.first?.id
+        }
+    }
+
+    private func importEditorClips() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.prompt = "Import"
+        panel.message = "Choose media files to add to clips."
+
+        guard panel.runModal() == .OK else {
+            return
+        }
+
+        for url in panel.urls.map(\.standardizedFileURL) {
+            guard let kind = MediaItem.kind(for: url) else {
+                continue
+            }
+            addToEditorClips(MediaItem(id: url, url: url, kind: kind))
+        }
+    }
+
+    private func editorClipThumbnail(for clip: EditorClip) -> NSImage? {
+        clip.thumbnail ?? library.thumbnails[clip.item.url]
+    }
+
+    private func timelineClipWidth(for clip: EditorClip) -> CGFloat {
+        let duration = clip.status?.duration ?? 10
+        return min(max(CGFloat(duration) * 7, 104), 260)
+    }
+
+    @MainActor
+    private func loadEditorClipMetadataIfNeeded(for clip: EditorClip) async {
+        guard let index = editorClips.firstIndex(where: { $0.id == clip.id }) else {
+            return
+        }
+
+        var thumbnail = editorClips[index].thumbnail ?? library.thumbnails[clip.item.url]
+        var status = editorClips[index].status
+
+        if thumbnail == nil {
+            thumbnail = await ThumbnailProvider.thumbnail(for: clip.item)
+        }
+
+        if status == nil {
+            status = await MediaMetadata.status(for: clip.item)
+        }
+
+        guard let currentIndex = editorClips.firstIndex(where: { $0.id == clip.id }) else {
+            return
+        }
+        editorClips[currentIndex].thumbnail = thumbnail
+        editorClips[currentIndex].status = status
+    }
+
     private func pin(_ item: MediaItem, crop: NormalizedCrop? = nil, trim: MediaTrim? = nil) {
         let normalizedCrop = crop?.clamped()
         let normalizedTrim: MediaTrim?
@@ -1215,6 +1699,10 @@ struct ContentView: View {
 
     private func pinMenuTitle(for item: MediaItem) -> String {
         pinnedItems.contains(where: { $0.id == item.id }) ? "Pinned" : "Pin File"
+    }
+
+    private func editorClipMenuTitle(for item: MediaItem) -> String {
+        editorClips.contains(where: { $0.id == item.id }) ? "Show in Clips" : "Add to Clips"
     }
 
     private func pinnedThumbnail(for item: MediaItem) -> NSImage? {
@@ -1370,6 +1858,68 @@ struct ContentView: View {
 private enum SidePanel {
     case thumbnail
     case pinned
+}
+
+private struct EditorClip: Identifiable {
+    var id: URL { item.id }
+    let item: MediaItem
+    var thumbnail: NSImage?
+    var status: MediaStatus?
+}
+
+private enum EditorMediaCategory: CaseIterable, Identifiable {
+    case media
+    case music
+    case text
+    case transitions
+    case movement
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .media:
+            return "Media"
+        case .music:
+            return "Music"
+        case .text:
+            return "Text"
+        case .transitions:
+            return "Transitions"
+        case .movement:
+            return "Movement"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .media:
+            return "photo.on.rectangle"
+        case .music:
+            return "music.note"
+        case .text:
+            return "textformat"
+        case .transitions:
+            return "bowtie"
+        case .movement:
+            return "figure.walk.motion"
+        }
+    }
+
+    var emptyMessage: String {
+        switch self {
+        case .media:
+            return "No clips added."
+        case .music:
+            return "No music assets added."
+        case .text:
+            return "No text assets added."
+        case .transitions:
+            return "No transitions added."
+        case .movement:
+            return "No movement presets added."
+        }
+    }
 }
 
 private struct PinnedCopyResult: Sendable {
@@ -1642,6 +2192,114 @@ private extension String {
         }
         regex += "$"
         return regex
+    }
+}
+
+private struct EditorClipCard: View {
+    let clip: EditorClip
+    let thumbnail: NSImage?
+    let isSelected: Bool
+
+    var body: some View {
+        VStack(spacing: 6) {
+            ZStack(alignment: .bottomTrailing) {
+                Group {
+                    if let thumbnail {
+                        Image(nsImage: thumbnail)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                    } else {
+                        ProgressView()
+                            .controlSize(.small)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                }
+                .frame(height: 64)
+                .frame(maxWidth: .infinity)
+                .clipShape(RoundedRectangle(cornerRadius: 5))
+                .background {
+                    RoundedRectangle(cornerRadius: 5)
+                        .fill(Color(nsColor: .quaternaryLabelColor))
+                }
+
+                Text(durationBadge)
+                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 2)
+                    .background(.thinMaterial, in: Capsule())
+                    .padding(4)
+            }
+
+            Text(clip.item.fileName)
+                .font(.caption2)
+                .lineLimit(2)
+                .truncationMode(.middle)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+        }
+        .padding(6)
+        .background(
+            RoundedRectangle(cornerRadius: 7)
+                .fill(isSelected ? Color.accentColor.opacity(0.14) : Color(nsColor: .windowBackgroundColor))
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 7)
+                .stroke(isSelected ? Color.accentColor : Color.secondary.opacity(0.18), lineWidth: isSelected ? 2 : 1)
+        }
+    }
+
+    private var durationBadge: String {
+        if let duration = clip.status?.duration {
+            return MediaTrim.format(duration)
+        }
+        return clip.item.kind.label
+    }
+}
+
+private struct TimelineClipBlock: View {
+    let clip: EditorClip
+    let thumbnail: NSImage?
+    let isSelected: Bool
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Group {
+                if let thumbnail {
+                    Image(nsImage: thumbnail)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                } else {
+                    Color.secondary.opacity(0.22)
+                }
+            }
+            .frame(width: 44)
+            .clipShape(RoundedRectangle(cornerRadius: 4))
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(clip.item.fileName)
+                    .font(.caption2.weight(.semibold))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                Text(clip.status?.duration.map(MediaTrim.format) ?? clip.item.kind.label)
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 7)
+        .padding(.vertical, 6)
+        .frame(height: 46)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(isSelected ? Color.accentColor.opacity(0.2) : Color.accentColor.opacity(0.1))
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(isSelected ? Color.accentColor : Color.accentColor.opacity(0.28), lineWidth: isSelected ? 2 : 1)
+        }
     }
 }
 

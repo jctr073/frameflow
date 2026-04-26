@@ -19,33 +19,51 @@ ContentView
    │  │     └─ ThumbnailRow
    │  │
    │  ├─ mainPanel
-   │  │  ├─ editingToolbar
-   │  │  │  ├─ Snapshot Current Frame
-   │  │  │  ├─ Crop Tool
-   │  │  │  ├─ Crop Presets
-   │  │  │  ├─ Reset Crop
-   │  │  │  ├─ Trim Tool
-   │  │  │  ├─ Reset Trim
-   │  │  │  ├─ TrimControls
-   │  │  │  │  ├─ TrimRangeSlider
-   │  │  │  │  ├─ Start time TextField
-   │  │  │  │  ├─ End time TextField
-   │  │  │  │  └─ Apply Trim button
-   │  │  │  ├─ Undo Edits
-   │  │  │  ├─ Apply Crop / Apply Trim
-   │  │  │  ├─ Move Edited Media to Pinned
-   │  │  │  └─ editSummaryLabel
-   │  │  │
-   │  │  └─ previewPanel
-   │  │     └─ PreviewPane
-   │  │        ├─ StaticImagePreview / NativeGIFImageView / NativeWebImageView
-   │  │        ├─ NativeVideoView
-   │  │        │  ├─ NativeVideoSurface
-   │  │        │  └─ NativeVideoControls
-   │  │        └─ CropOverlay
-   │  │           ├─ CropDimShape
-   │  │           ├─ crop drag/resize handles
-   │  │           └─ Apply Crop button
+   │  │  ├─ mainPanelTabBar
+   │  │  │  ├─ Preview tab
+   │  │  │  └─ Video Editor tab
+   │  │  ├─ previewMainPanel
+   │  │  │  ├─ editingToolbar
+   │  │  │  │  ├─ Snapshot Current Frame
+   │  │  │  │  ├─ Crop Tool
+   │  │  │  │  ├─ Crop Presets
+   │  │  │  │  ├─ Reset Crop
+   │  │  │  │  ├─ Trim Tool
+   │  │  │  │  ├─ Reset Trim
+   │  │  │  │  ├─ TrimControls
+   │  │  │  │  │  ├─ TrimRangeSlider
+   │  │  │  │  │  ├─ Start time TextField
+   │  │  │  │  │  ├─ End time TextField
+   │  │  │  │  │  └─ Apply Trim button
+   │  │  │  │  ├─ Undo Edits
+   │  │  │  │  ├─ Apply Crop / Apply Trim
+   │  │  │  │  ├─ Move Edited Media to Pinned
+   │  │  │  │  └─ editSummaryLabel
+   │  │  │  └─ previewPanel
+   │  │  │     └─ PreviewPane
+   │  │  │        ├─ StaticImagePreview / NativeGIFImageView / NativeWebImageView
+   │  │  │        ├─ NativeVideoView
+   │  │  │        │  ├─ NativeVideoSurface
+   │  │  │        │  └─ NativeVideoControls
+   │  │  │        └─ CropOverlay
+   │  │  │           ├─ CropDimShape
+   │  │  │           ├─ crop drag/resize handles
+   │  │  │           └─ Apply Crop button
+   │  │  └─ videoEditorPanel
+   │  │     ├─ clipsPane
+   │  │     │  ├─ Clips header
+   │  │     │  ├─ Import Clips button
+   │  │     │  ├─ Media / Music / Text / Transitions / Movement tabs
+   │  │     │  └─ EditorClipCard grid
+   │  │     ├─ playerPane
+   │  │     │  ├─ selected clip header
+   │  │     │  └─ PreviewPane
+   │  │     └─ timelinePane
+   │  │        ├─ disabled phase-1 timeline toolbar
+   │  │        ├─ timelineRuler
+   │  │        ├─ Video track
+   │  │        │  └─ TimelineClipBlock
+   │  │        └─ Audio track
    │  │
    │  └─ pinnedPanel
    │     ├─ Pinned header toolbar
@@ -73,6 +91,14 @@ ContentView overlays/background helpers
 └─ KeyboardMonitor
 ```
 
+## App Commands
+
+```text
+View menu
+├─ Preview Panel checkbox
+└─ Video Editor Panel checkbox
+```
+
 ## Panel State
 
 The active side panel is tracked with `SidePanel` in `ContentView.swift`.
@@ -84,13 +110,29 @@ private enum SidePanel {
 }
 ```
 
+The active main panel tab and visible main panel tabs are tracked with `MainPanelTab` and
+`MainPanelState` in `MainPanelState.swift`.
+
+```swift
+enum MainPanelTab {
+    case preview
+    case videoEditor
+}
+```
+
+The video editor clip list is owned by `ContentView` as `editorClips`. Clips are added from
+`thumbnailPanel` through the thumbnail context menu's `Add to Clips` action or the
+`Control+C` keyboard shortcut.
+
 ## Code Anchors
 
 - Main app shell: `Sources/MediaBrowser/ContentView.swift`
+- Main panel tab state: `Sources/MediaBrowser/MainPanelState.swift`
 - `thumbnailPanel`: `Sources/MediaBrowser/ContentView.swift`
 - `pinnedPanel`: `Sources/MediaBrowser/ContentView.swift`
 - `statusBar`: `Sources/MediaBrowser/ContentView.swift`
-- `mainPanel`, `editingToolbar`, `previewPanel`: `Sources/MediaBrowser/ContentView.swift`
+- `mainPanel`, `mainPanelTabBar`, `editingToolbar`, `previewPanel`: `Sources/MediaBrowser/ContentView.swift`
+- `videoEditorPanel`, `clipsPane`, `playerPane`, `timelinePane`: `Sources/MediaBrowser/ContentView.swift`
 - `TrimControls`: `Sources/MediaBrowser/ContentView.swift`
 - `PreviewPane`: `Sources/MediaBrowser/ContentView.swift`
 - `NativeVideoView`, `NativeVideoSurface`, `NativeVideoControls`: `Sources/MediaBrowser/NativeMediaViews.swift`
