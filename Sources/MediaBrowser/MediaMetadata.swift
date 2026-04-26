@@ -1,6 +1,7 @@
 import AVFoundation
 import CoreGraphics
 import Foundation
+import ImageIO
 
 struct MediaStatus: Equatable, Sendable {
     let size: CGSize?
@@ -40,18 +41,46 @@ enum MediaMetadata {
     }
 
     private static func duration(for item: MediaItem) async -> TimeInterval? {
-        guard item.kind == .video else { return nil }
+        switch item.kind {
+        case .video:
+            return await Task.detached(priority: .utility) {
+                let asset = AVURLAsset(url: item.url)
+                do {
+                    let duration = try await asset.load(.duration)
+                    let seconds = CMTimeGetSeconds(duration)
+                    guard seconds.isFinite, seconds > 0 else { return nil }
+                    return seconds
+                } catch {
+                    return nil
+                }
+            }.value
+        case .gif:
+            return await Task.detached(priority: .utility) {
+                guard let source = CGImageSourceCreateWithURL(item.url as CFURL, nil) else {
+                    return nil
+                }
 
-        return await Task.detached(priority: .utility) {
-            let asset = AVURLAsset(url: item.url)
-            do {
-                let duration = try await asset.load(.duration)
-                let seconds = CMTimeGetSeconds(duration)
-                guard seconds.isFinite, seconds > 0 else { return nil }
-                return seconds
-            } catch {
-                return nil
-            }
-        }.value
+                let count = CGImageSourceGetCount(source)
+                guard count > 0 else { return nil }
+                let duration = (0..<count).reduce(TimeInterval(0)) { total, index in
+                    total + gifFrameDuration(source: source, index: index)
+                }
+                return duration > 0 ? duration : nil
+            }.value
+        case .image, .webp:
+            return nil
+        }
+    }
+
+    private static func gifFrameDuration(source: CGImageSource, index: Int) -> TimeInterval {
+        guard let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any],
+              let gifProperties = properties[kCGImagePropertyGIFDictionary] as? [CFString: Any]
+        else {
+            return 0.1
+        }
+
+        let unclampedDelay = gifProperties[kCGImagePropertyGIFUnclampedDelayTime] as? TimeInterval
+        let delay = unclampedDelay ?? gifProperties[kCGImagePropertyGIFDelayTime] as? TimeInterval ?? 0.1
+        return max(0.02, delay)
     }
 }
