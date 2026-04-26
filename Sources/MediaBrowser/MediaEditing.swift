@@ -144,6 +144,12 @@ struct PinnedMediaItem: Identifiable, Hashable, Sendable {
     }
 }
 
+struct TimelineExportClip: Sendable {
+    let item: MediaItem
+    let trim: MediaTrim?
+    let volume: Float
+}
+
 enum MediaExport {
     static func export(_ pinnedItem: PinnedMediaItem, to destinationURL: URL) async throws {
         let crop = pinnedItem.crop ?? .full
@@ -161,6 +167,155 @@ enum MediaExport {
             try await exportAnimatedGIF(pinnedItem.item, crop: crop, trim: trim, to: destinationURL)
         case .video:
             try await exportVideo(pinnedItem.item, crop: crop, trim: trim, to: destinationURL)
+        }
+    }
+
+    static func exportTimeline(_ clips: [TimelineExportClip], to destinationURL: URL) async throws {
+        guard !clips.isEmpty else {
+            throw MediaExportError.emptyTimeline
+        }
+        guard clips.allSatisfy({ $0.item.kind == .video }) else {
+            throw MediaExportError.unsupportedTimelineClip
+        }
+
+        if FileManager.default.fileExists(atPath: destinationURL.path) {
+            try FileManager.default.removeItem(at: destinationURL)
+        }
+
+        let composition = AVMutableComposition()
+        var instructions: [AVMutableVideoCompositionInstruction] = []
+        var audioParameters: [AVMutableAudioMixInputParameters] = []
+        var cursor = CMTime.zero
+        var renderSize: CGSize?
+        var frameRate: Float = 30
+
+        for clip in clips {
+            let asset = AVURLAsset(url: clip.item.url)
+            let duration = try await asset.load(.duration)
+            let durationSeconds = CMTimeGetSeconds(duration)
+            guard durationSeconds.isFinite, durationSeconds > 0 else {
+                throw MediaExportError.cannotLoadSource
+            }
+
+            let sourceTimeRange = (clip.trim?.timeRange(in: duration) ?? CMTimeRange(start: .zero, duration: duration))
+            guard sourceTimeRange.duration.seconds > MediaTrim.minimumDuration else {
+                throw MediaExportError.invalidTrim
+            }
+
+            let videoTracks = try await asset.loadTracks(withMediaType: .video)
+            guard let sourceVideoTrack = videoTracks.first,
+                  let compositionVideoTrack = composition.addMutableTrack(
+                    withMediaType: .video,
+                    preferredTrackID: kCMPersistentTrackID_Invalid
+                  )
+            else {
+                throw MediaExportError.cannotLoadSource
+            }
+
+            try compositionVideoTrack.insertTimeRange(sourceTimeRange, of: sourceVideoTrack, at: cursor)
+
+            let naturalSize = try await sourceVideoTrack.load(.naturalSize)
+            let preferredTransform = try await sourceVideoTrack.load(.preferredTransform)
+            let transformedBounds = CGRect(origin: .zero, size: naturalSize)
+                .applying(preferredTransform)
+                .standardized
+            let displaySize = CGSize(width: abs(transformedBounds.width), height: abs(transformedBounds.height))
+            if renderSize == nil {
+                renderSize = CGSize(width: even(displaySize.width), height: even(displaySize.height))
+            }
+
+            if let nominalFrameRate = try? await sourceVideoTrack.load(.nominalFrameRate), nominalFrameRate > frameRate {
+                frameRate = nominalFrameRate
+            }
+
+            let instruction = AVMutableVideoCompositionInstruction()
+            instruction.timeRange = CMTimeRange(start: cursor, duration: sourceTimeRange.duration)
+
+            let layerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: compositionVideoTrack)
+            if let renderSize {
+                let scale = min(renderSize.width / max(displaySize.width, 1), renderSize.height / max(displaySize.height, 1))
+                let scaledSize = CGSize(width: displaySize.width * scale, height: displaySize.height * scale)
+                let normalize = CGAffineTransform(
+                    translationX: -transformedBounds.minX,
+                    y: -transformedBounds.minY
+                )
+                let fit = CGAffineTransform(scaleX: scale, y: scale)
+                let center = CGAffineTransform(
+                    translationX: (renderSize.width - scaledSize.width) / 2,
+                    y: (renderSize.height - scaledSize.height) / 2
+                )
+                layerInstruction.setTransform(
+                    preferredTransform
+                        .concatenating(normalize)
+                        .concatenating(fit)
+                        .concatenating(center),
+                    at: cursor
+                )
+            } else {
+                layerInstruction.setTransform(preferredTransform, at: cursor)
+            }
+            instruction.layerInstructions = [layerInstruction]
+            instructions.append(instruction)
+
+            let audioTracks = try await asset.loadTracks(withMediaType: .audio)
+            for audioTrack in audioTracks {
+                guard let compositionAudioTrack = composition.addMutableTrack(
+                    withMediaType: .audio,
+                    preferredTrackID: kCMPersistentTrackID_Invalid
+                ) else {
+                    continue
+                }
+                try? compositionAudioTrack.insertTimeRange(sourceTimeRange, of: audioTrack, at: cursor)
+                let parameters = AVMutableAudioMixInputParameters(track: compositionAudioTrack)
+                parameters.setVolume(max(0, clip.volume), at: cursor)
+                audioParameters.append(parameters)
+            }
+
+            cursor = cursor + sourceTimeRange.duration
+        }
+
+        guard cursor.seconds > MediaTrim.minimumDuration,
+              let renderSize
+        else {
+            throw MediaExportError.emptyTimeline
+        }
+
+        let videoComposition = AVMutableVideoComposition()
+        videoComposition.renderSize = renderSize
+        videoComposition.frameDuration = CMTime(value: 1, timescale: CMTimeScale(max(frameRate.rounded(), 24)))
+        videoComposition.instructions = instructions
+
+        let audioMix: AVMutableAudioMix?
+        if audioParameters.isEmpty {
+            audioMix = nil
+        } else {
+            let mix = AVMutableAudioMix()
+            mix.inputParameters = audioParameters
+            audioMix = mix
+        }
+
+        guard let exportSession = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetHighestQuality) else {
+            throw MediaExportError.cannotCreateDestination
+        }
+
+        exportSession.outputURL = destinationURL
+        exportSession.outputFileType = .mp4
+        exportSession.shouldOptimizeForNetworkUse = true
+        exportSession.videoComposition = videoComposition
+        exportSession.audioMix = audioMix
+
+        let exportSessionBox = ExportSessionBox(exportSession)
+        try await withCheckedThrowingContinuation { continuation in
+            exportSession.exportAsynchronously {
+                switch exportSessionBox.session.status {
+                case .completed:
+                    continuation.resume()
+                case .failed, .cancelled:
+                    continuation.resume(throwing: exportSessionBox.session.error ?? MediaExportError.cannotFinalizeDestination)
+                default:
+                    continuation.resume(throwing: MediaExportError.cannotFinalizeDestination)
+                }
+            }
         }
     }
 
@@ -463,6 +618,8 @@ enum MediaExport {
 
 enum MediaExportError: LocalizedError {
     case cannotLoadSource
+    case emptyTimeline
+    case unsupportedTimelineClip
     case invalidCrop
     case invalidTrim
     case cannotCreateDestination
@@ -472,6 +629,10 @@ enum MediaExportError: LocalizedError {
         switch self {
         case .cannotLoadSource:
             return "The source media could not be loaded."
+        case .emptyTimeline:
+            return "The timeline is empty."
+        case .unsupportedTimelineClip:
+            return "Timeline export currently supports video clips only."
         case .invalidCrop:
             return "The crop area is too small."
         case .invalidTrim:

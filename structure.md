@@ -58,8 +58,16 @@ ContentView
    │  │     ├─ playerPane
    │  │     │  ├─ selected media-bin or timeline clip header
    │  │     │  └─ PreviewPane
+   │  │     ├─ inspectorPane
+   │  │     │  ├─ Video / Image / Audio / Adjust tabs
+   │  │     │  ├─ Reframe controls
+   │  │     │  ├─ Keyframe controls
+   │  │     │  ├─ Stabilization / horizon controls
+   │  │     │  ├─ Audio controls
+   │  │     │  └─ Color / exposure controls
    │  │     └─ timelinePane
    │  │        ├─ timeline toolbar
+   │  │        │  ├─ Export Timeline
    │  │        │  ├─ Reset Timeline Trim
    │  │        │  ├─ Split Clip
    │  │        │  ├─ Snap toggle
@@ -145,6 +153,16 @@ creates two timeline instances split at the current player time. `isTimelineSnap
 snaps trim and split times to half-second increments, and `timelineZoom` controls timeline
 clip width and ruler scale without changing media timing.
 
+Phase 4 timeline export is handled by `MediaExport.exportTimeline`. `ContentView` converts
+`timelineClips` into `TimelineExportClip` values, including clip trims and audio volume /
+mute state, then saves a stitched MP4 through `AVMutableComposition`. Export currently
+supports video timeline clips.
+
+The right-side `inspectorPane` stores per-timeline-clip `EditorTimelineAdjustments`,
+including reframe, keyframe, stabilization, horizon, audio, and color/exposure settings.
+The current export path honors audio mute/volume; visual adjustment rendering is stored in
+state for the next render/effects pass.
+
 ## Code Anchors
 
 - Main app shell: `Sources/MediaBrowser/ContentView.swift`
@@ -153,7 +171,8 @@ clip width and ruler scale without changing media timing.
 - `pinnedPanel`: `Sources/MediaBrowser/ContentView.swift`
 - `statusBar`: `Sources/MediaBrowser/ContentView.swift`
 - `mainPanel`, `mainPanelTabBar`, `editingToolbar`, `previewPanel`: `Sources/MediaBrowser/ContentView.swift`
-- `videoEditorPanel`, `clipsPane`, `playerPane`, `timelinePane`: `Sources/MediaBrowser/ContentView.swift`
+- `videoEditorPanel`, `clipsPane`, `playerPane`, `inspectorPane`, `timelinePane`: `Sources/MediaBrowser/ContentView.swift`
+- timeline export: `Sources/MediaBrowser/MediaEditing.swift`
 - `TrimControls`: `Sources/MediaBrowser/ContentView.swift`
 - `PreviewPane`: `Sources/MediaBrowser/ContentView.swift`
 - `NativeVideoView`, `NativeVideoSurface`, `NativeVideoControls`: `Sources/MediaBrowser/NativeMediaViews.swift`

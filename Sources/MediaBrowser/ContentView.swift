@@ -16,10 +16,12 @@ struct ContentView: View {
     @State private var timelineClips: [EditorTimelineClip] = []
     @State private var selectedTimelineClipID: EditorTimelineClip.ID?
     @State private var editorMediaCategory: EditorMediaCategory = .media
+    @State private var editorInspectorTab: EditorInspectorTab = .video
     @State private var editorPlayerTime: TimeInterval = 0
     @State private var isTimelineDropTargeted = false
     @State private var isTimelineSnappingEnabled = true
     @State private var timelineZoom = 1.0
+    @State private var isExportingTimeline = false
     @State private var activePanel: SidePanel = .thumbnail
     @State private var thumbnailSelectionID: URL?
     @State private var isCopyingPinnedFiles = false
@@ -674,6 +676,9 @@ struct ContentView: View {
 
                 playerPane
                     .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
+
+                inspectorPane
+                    .frame(minWidth: 210, idealWidth: 240, maxWidth: 300)
             }
             .frame(minHeight: 280, maxHeight: .infinity)
 
@@ -849,9 +854,217 @@ struct ContentView: View {
         .background(Color(nsColor: .underPageBackgroundColor))
     }
 
+    private var inspectorPane: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 4) {
+                ForEach(EditorInspectorTab.allCases) { tab in
+                    Button {
+                        editorInspectorTab = tab
+                    } label: {
+                        Text(tab.title)
+                            .font(.system(size: 10, weight: .semibold))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 7)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(editorInspectorTab == tab ? Color.accentColor.opacity(0.16) : Color.clear)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(editorInspectorTab == tab ? Color.accentColor : Color.secondary)
+                    .quickTooltip(tab.title)
+                    .accessibilityLabel(tab.title)
+                }
+            }
+            .frame(height: topToolbarHeight)
+            .padding(.horizontal, 8)
+            .background(.bar)
+            .overlay(alignment: .bottom) {
+                Divider()
+            }
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    switch editorInspectorTab {
+                    case .video:
+                        videoInspectorControls
+                    case .image:
+                        imageInspectorControls
+                    case .audio:
+                        audioInspectorControls
+                    case .adjust:
+                        adjustInspectorControls
+                    }
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .disabled(selectedTimelineClipID == nil)
+            .overlay {
+                if selectedTimelineClipID == nil {
+                    Text("Select a timeline clip.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding()
+                }
+            }
+        }
+        .background(Color(nsColor: .controlBackgroundColor))
+    }
+
+    @ViewBuilder
+    private var videoInspectorControls: some View {
+        InspectorSection(title: "Reframe") {
+            Picker("View", selection: timelineAdjustmentBinding(\.viewMode, default: .wide)) {
+                ForEach(EditorViewMode.allCases) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            InspectorSliderRow(
+                title: "FOV",
+                value: timelineAdjustmentBinding(\.fieldOfView, default: 90),
+                range: 30...140,
+                format: "%.0f"
+            )
+            InspectorSliderRow(
+                title: "Yaw",
+                value: timelineAdjustmentBinding(\.yaw, default: 0),
+                range: -180...180,
+                format: "%.0f"
+            )
+            InspectorSliderRow(
+                title: "Pitch",
+                value: timelineAdjustmentBinding(\.pitch, default: 0),
+                range: -90...90,
+                format: "%.0f"
+            )
+            InspectorSliderRow(
+                title: "Roll",
+                value: timelineAdjustmentBinding(\.roll, default: 0),
+                range: -180...180,
+                format: "%.0f"
+            )
+        }
+
+        InspectorSection(title: "Keyframes") {
+            Toggle("Keyframes", isOn: timelineAdjustmentBinding(\.keyframesEnabled, default: false))
+            Toggle("Deep Track", isOn: timelineAdjustmentBinding(\.deepTrackEnabled, default: false))
+            Picker("Transition", selection: timelineAdjustmentBinding(\.transitionStyle, default: .linear)) {
+                ForEach(EditorKeyframeTransition.allCases) { transition in
+                    Text(transition.title).tag(transition)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var imageInspectorControls: some View {
+        InspectorSection(title: "Framing") {
+            Toggle("Horizon Lock", isOn: timelineAdjustmentBinding(\.horizonLockEnabled, default: false))
+            Toggle("Stabilization", isOn: timelineAdjustmentBinding(\.stabilizationEnabled, default: false))
+            InspectorSliderRow(
+                title: "Horizon",
+                value: timelineAdjustmentBinding(\.horizonLevel, default: 0),
+                range: -45...45,
+                format: "%.0f"
+            )
+        }
+
+        InspectorSection(title: "Scale") {
+            InspectorSliderRow(
+                title: "Zoom",
+                value: timelineAdjustmentBinding(\.zoom, default: 1),
+                range: 0.5...3,
+                format: "%.2f"
+            )
+            InspectorSliderRow(
+                title: "X",
+                value: timelineAdjustmentBinding(\.offsetX, default: 0),
+                range: -100...100,
+                format: "%.0f"
+            )
+            InspectorSliderRow(
+                title: "Y",
+                value: timelineAdjustmentBinding(\.offsetY, default: 0),
+                range: -100...100,
+                format: "%.0f"
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var audioInspectorControls: some View {
+        InspectorSection(title: "Audio") {
+            Toggle("Mute", isOn: timelineAdjustmentBinding(\.isMuted, default: false))
+            InspectorSliderRow(
+                title: "Volume",
+                value: timelineAdjustmentBinding(\.volume, default: 1),
+                range: 0...2,
+                format: "%.2f"
+            )
+            Toggle("Noise Reduction", isOn: timelineAdjustmentBinding(\.noiseReductionEnabled, default: false))
+        }
+    }
+
+    @ViewBuilder
+    private var adjustInspectorControls: some View {
+        InspectorSection(title: "Color") {
+            InspectorSliderRow(
+                title: "Exposure",
+                value: timelineAdjustmentBinding(\.exposure, default: 0),
+                range: -2...2,
+                format: "%.1f"
+            )
+            InspectorSliderRow(
+                title: "Contrast",
+                value: timelineAdjustmentBinding(\.contrast, default: 1),
+                range: 0...2,
+                format: "%.2f"
+            )
+            InspectorSliderRow(
+                title: "Saturation",
+                value: timelineAdjustmentBinding(\.saturation, default: 1),
+                range: 0...2,
+                format: "%.2f"
+            )
+            InspectorSliderRow(
+                title: "Sharpness",
+                value: timelineAdjustmentBinding(\.sharpness, default: 0),
+                range: 0...1,
+                format: "%.2f"
+            )
+        }
+    }
+
     private var timelinePane: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
+                Button {
+                    exportTimeline()
+                } label: {
+                    if isExportingTimeline {
+                        ProgressView()
+                            .controlSize(.small)
+                            .frame(width: 24, height: 24)
+                    } else {
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.system(size: 13, weight: .medium))
+                            .frame(width: 24, height: 24)
+                    }
+                }
+                .buttonStyle(.plain)
+                .disabled(timelineClips.isEmpty || isExportingTimeline)
+                .quickTooltip("Export Timeline")
+                .accessibilityLabel("Export Timeline")
+
+                Divider()
+                    .frame(height: 18)
+
                 Button {
                     resetSelectedTimelineTrim()
                 } label: {
@@ -1719,6 +1932,29 @@ struct ContentView: View {
         editorClips.first { $0.id == timelineClip.sourceClipID }
     }
 
+    private func timelineAdjustmentBinding<Value>(
+        _ keyPath: WritableKeyPath<EditorTimelineAdjustments, Value>,
+        default defaultValue: Value
+    ) -> Binding<Value> {
+        Binding {
+            selectedTimelineClip?.adjustments[keyPath: keyPath] ?? defaultValue
+        } set: { newValue in
+            updateSelectedTimelineAdjustments { adjustments in
+                adjustments[keyPath: keyPath] = newValue
+            }
+        }
+    }
+
+    private func updateSelectedTimelineAdjustments(_ update: (inout EditorTimelineAdjustments) -> Void) {
+        guard let selectedTimelineClipID,
+              let index = timelineClips.firstIndex(where: { $0.id == selectedTimelineClipID })
+        else {
+            return
+        }
+
+        update(&timelineClips[index].adjustments)
+    }
+
     private func timelineTrim(for clip: EditorTimelineClip, duration: TimeInterval) -> MediaTrim {
         (clip.trim ?? .full(duration: duration)).clamped(to: duration)
     }
@@ -1932,6 +2168,70 @@ struct ContentView: View {
         }
 
         removeTimelineClip(selectedTimelineClip)
+    }
+
+    private func exportTimeline() {
+        guard !timelineClips.isEmpty, !isExportingTimeline else {
+            return
+        }
+
+        let exportClips = timelineExportClips()
+        guard !exportClips.isEmpty else {
+            showTimelineExportFailure(MediaExportError.emptyTimeline)
+            return
+        }
+
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.mpeg4Movie]
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = "Timeline Export.mp4"
+        panel.directoryURL = library.folderURL
+        panel.message = "Choose where to save the timeline export."
+
+        guard panel.runModal() == .OK, let destinationURL = panel.url else {
+            return
+        }
+
+        isExportingTimeline = true
+        Task {
+            do {
+                try await MediaExport.exportTimeline(exportClips, to: destinationURL)
+                showTimelineExportSuccess(destinationURL)
+            } catch {
+                showTimelineExportFailure(error)
+            }
+            isExportingTimeline = false
+        }
+    }
+
+    private func timelineExportClips() -> [TimelineExportClip] {
+        timelineClips.compactMap { timelineClip in
+            guard let sourceClip = editorClip(for: timelineClip) else {
+                return nil
+            }
+
+            let adjustments = timelineClip.adjustments
+            return TimelineExportClip(
+                item: sourceClip.item,
+                trim: timelineClip.trim,
+                volume: adjustments.isMuted ? 0 : Float(adjustments.volume)
+            )
+        }
+    }
+
+    private func showTimelineExportSuccess(_ destinationURL: URL) {
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = "Timeline Exported"
+        alert.informativeText = "Saved timeline export to \(destinationURL.path)."
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
+    private func showTimelineExportFailure(_ error: Error) {
+        let alert = NSAlert(error: error)
+        alert.messageText = "Timeline Export Failed"
+        alert.runModal()
     }
 
     @MainActor
@@ -2256,6 +2556,97 @@ private struct EditorTimelineClip: Identifiable, Hashable {
     let id = UUID()
     let sourceClipID: EditorClip.ID
     var trim: MediaTrim? = nil
+    var adjustments = EditorTimelineAdjustments()
+}
+
+private struct EditorTimelineAdjustments: Hashable {
+    var viewMode: EditorViewMode = .wide
+    var fieldOfView = 90.0
+    var yaw = 0.0
+    var pitch = 0.0
+    var roll = 0.0
+    var keyframesEnabled = false
+    var deepTrackEnabled = false
+    var transitionStyle: EditorKeyframeTransition = .linear
+    var stabilizationEnabled = false
+    var horizonLockEnabled = false
+    var horizonLevel = 0.0
+    var zoom = 1.0
+    var offsetX = 0.0
+    var offsetY = 0.0
+    var isMuted = false
+    var volume = 1.0
+    var noiseReductionEnabled = false
+    var exposure = 0.0
+    var contrast = 1.0
+    var saturation = 1.0
+    var sharpness = 0.0
+}
+
+private enum EditorInspectorTab: CaseIterable, Identifiable {
+    case video
+    case image
+    case audio
+    case adjust
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .video:
+            return "Video"
+        case .image:
+            return "Image"
+        case .audio:
+            return "Audio"
+        case .adjust:
+            return "Adjust"
+        }
+    }
+}
+
+private enum EditorViewMode: String, CaseIterable, Identifiable {
+    case wide
+    case linear
+    case tinyPlanet
+    case crystalBall
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .wide:
+            return "Wide"
+        case .linear:
+            return "Linear"
+        case .tinyPlanet:
+            return "Tiny"
+        case .crystalBall:
+            return "Crystal"
+        }
+    }
+}
+
+private enum EditorKeyframeTransition: String, CaseIterable, Identifiable {
+    case linear
+    case easeIn
+    case easeOut
+    case easeInOut
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .linear:
+            return "Linear"
+        case .easeIn:
+            return "Ease In"
+        case .easeOut:
+            return "Ease Out"
+        case .easeInOut:
+            return "Ease"
+        }
+    }
 }
 
 private enum EditorMediaCategory: CaseIterable, Identifiable {
@@ -2583,6 +2974,54 @@ private extension String {
         }
         regex += "$"
         return regex
+    }
+}
+
+private struct InspectorSection<Content: View>: View {
+    let title: String
+    let content: () -> Content
+
+    init(title: String, @ViewBuilder content: @escaping () -> Content) {
+        self.title = title
+        self.content = content
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            VStack(alignment: .leading, spacing: 8) {
+                content()
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct InspectorSliderRow: View {
+    let title: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let format: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Text(title)
+                    .font(.caption)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                Text(String(format: format, value))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(width: 44, alignment: .trailing)
+            }
+
+            Slider(value: $value, in: range)
+                .controlSize(.small)
+        }
     }
 }
 
