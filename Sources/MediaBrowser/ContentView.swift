@@ -15,6 +15,8 @@ struct ContentView: View {
     @State private var isCopyingPinnedFiles = false
     @State private var isCropToolActive = false
     @State private var isTrimToolActive = false
+    @State private var isCapturingSnapshot = false
+    @State private var previewVideoTime: TimeInterval = 0
     @State private var cropRects: [URL: NormalizedCrop] = [:]
     @State private var trimRanges: [URL: MediaTrim] = [:]
     @State private var appliedCrops: [URL: NormalizedCrop] = [:]
@@ -61,6 +63,7 @@ struct ContentView: View {
         }
         .onChange(of: library.selectedID) {
             zoomIndex = 3
+            previewVideoTime = 0
             if activePanel == .thumbnail,
                let selectedID = library.selectedID,
                visibleThumbnailEntries.contains(where: { $0.id == selectedID }) {
@@ -525,6 +528,24 @@ struct ContentView: View {
     private var editingToolbar: some View {
         HStack(spacing: 4) {
             Button {
+                snapshotSelectedPreviewFrame()
+            } label: {
+                if isCapturingSnapshot {
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(width: 28, height: 26)
+                } else {
+                    Image(systemName: "camera")
+                        .font(.system(size: 14, weight: .medium))
+                        .frame(width: 28, height: 26)
+                }
+            }
+            .buttonStyle(.plain)
+            .disabled(!selectedCanSnapshot || isCapturingSnapshot)
+            .quickTooltip("Snapshot Current Frame")
+            .accessibilityLabel("Snapshot Current Frame")
+
+            Button {
                 isCropToolActive.toggle()
             } label: {
                 Image(systemName: "crop")
@@ -695,6 +716,7 @@ struct ContentView: View {
                     appliedCrop: selectedAppliedCrop,
                     appliedTrim: selectedPreviewTrim,
                     onApplyCrop: applySelectedCrop,
+                    onVideoTimeChange: { previewVideoTime = $0 },
                     crop: cropBinding(for: item)
                 )
                     .id(item.id)
@@ -1110,6 +1132,57 @@ struct ContentView: View {
         if let selectedItem {
             pin(selectedItem)
         }
+    }
+
+    private var selectedCanSnapshot: Bool {
+        selectedItem?.kind == .video
+    }
+
+    private func snapshotSelectedPreviewFrame() {
+        guard let item = selectedItem,
+              item.kind == .video,
+              !isCapturingSnapshot
+        else {
+            return
+        }
+
+        let snapshotTime = selectedSnapshotTime()
+        let snapshotCrop = isCropToolActive ? .full : selectedAppliedCrop
+        isCapturingSnapshot = true
+
+        Task {
+            do {
+                let snapshot = try await MediaSnapshot.captureVideoFrame(
+                    from: item,
+                    at: snapshotTime,
+                    crop: snapshotCrop
+                )
+                pinnedItems.append(PinnedMediaItem(item: snapshot.item))
+                pinnedThumbnails[snapshot.item.url] = snapshot.thumbnail
+                activePanel = .pinned
+                library.selectedID = snapshot.item.id
+            } catch {
+                showSnapshotFailure(error)
+            }
+            isCapturingSnapshot = false
+        }
+    }
+
+    private func selectedSnapshotTime() -> TimeInterval {
+        guard let duration = selectedStatus.duration else {
+            return max(0, previewVideoTime)
+        }
+
+        let trim = selectedPreviewTrim?.clamped(to: duration)
+        let lowerBound = trim?.start ?? 0
+        let upperBound = trim?.end ?? duration
+        return min(max(previewVideoTime, lowerBound), upperBound)
+    }
+
+    private func showSnapshotFailure(_ error: Error) {
+        let alert = NSAlert(error: error)
+        alert.messageText = "Snapshot Failed"
+        alert.runModal()
     }
 
     private func unpin(_ item: MediaItem) {
@@ -1670,6 +1743,7 @@ struct PreviewPane: View {
     let appliedCrop: NormalizedCrop
     let appliedTrim: MediaTrim?
     let onApplyCrop: () -> Void
+    let onVideoTimeChange: (TimeInterval) -> Void
     @Binding var crop: NormalizedCrop
 
     @State private var naturalSize: CGSize?
@@ -1723,7 +1797,8 @@ struct PreviewPane: View {
                         url: item.url,
                         crop: displayCrop,
                         displaySize: naturalSize,
-                        trim: appliedTrim
+                        trim: appliedTrim,
+                        onTimeChange: onVideoTimeChange
                     )
                     .frame(width: mediaSize.width, height: mediaSize.height)
                 } else {
@@ -1750,7 +1825,13 @@ struct PreviewPane: View {
         case .webp:
             NativeWebImageView(url: item.url)
         case .video:
-            NativeVideoView(url: item.url, crop: .full, displaySize: nil, trim: appliedTrim)
+            NativeVideoView(
+                url: item.url,
+                crop: .full,
+                displaySize: nil,
+                trim: appliedTrim,
+                onTimeChange: onVideoTimeChange
+            )
         }
     }
 

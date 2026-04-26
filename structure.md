@@ -20,6 +20,7 @@ ContentView
    │  │
    │  ├─ mainPanel
    │  │  ├─ editingToolbar
+   │  │  │  ├─ Snapshot Current Frame
    │  │  │  ├─ Crop Tool
    │  │  │  ├─ Crop Presets
    │  │  │  ├─ Reset Crop

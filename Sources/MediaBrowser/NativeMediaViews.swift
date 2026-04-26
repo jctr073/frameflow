@@ -177,6 +177,7 @@ struct NativeVideoView: View {
     var crop = NormalizedCrop.full
     var displaySize: CGSize?
     var trim: MediaTrim?
+    var onTimeChange: (TimeInterval) -> Void = { _ in }
 
     @StateObject private var controller = NativeVideoController()
 
@@ -203,6 +204,9 @@ struct NativeVideoView: View {
         }
         .onChange(of: trim) {
             loadVideo()
+        }
+        .onChange(of: controller.currentTime) {
+            onTimeChange(controller.currentTime)
         }
     }
 
