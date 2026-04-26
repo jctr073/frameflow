@@ -48,6 +48,7 @@ struct ContentView: View {
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .overlay(dropOverlay)
+        .quickTooltipOverlay()
         .background(KeyboardMonitor(onKeyDown: handleKeyDown).frame(width: 0, height: 0))
         .onDrop(of: [UTType.fileURL.identifier], isTargeted: $isDropTargeted, perform: handleDrop)
         .task {
@@ -160,7 +161,7 @@ struct ContentView: View {
                 if isCopyingPinnedFiles {
                     ProgressView()
                         .controlSize(.small)
-                        .help("Saving Pinned Files")
+                        .quickTooltip("Saving Pinned Files")
                 } else {
                     Button {
                         copyPinnedFilesToFolder()
@@ -170,7 +171,7 @@ struct ContentView: View {
                             .frame(width: 24, height: 24)
                     }
                     .buttonStyle(.plain)
-                    .help("Copy Pinned Files")
+                    .quickTooltip("Copy Pinned Files")
                     .accessibilityLabel("Copy Pinned Files")
                 }
 
@@ -182,7 +183,7 @@ struct ContentView: View {
                         .frame(width: 24, height: 24)
                 }
                 .buttonStyle(.plain)
-                .help("Clear Pinned Files")
+                .quickTooltip("Clear Pinned Files")
                 .accessibilityLabel("Clear Pinned Files")
 
                 Text("\(pinnedItems.count)")
@@ -252,7 +253,7 @@ struct ContentView: View {
             }
             .buttonStyle(.plain)
             .keyboardShortcut("o", modifiers: .command)
-            .help("Open Folder")
+            .quickTooltip("Open Folder")
             .accessibilityLabel("Open Folder")
 
             Text(library.folderURL?.lastPathComponent ?? "No Folder")
@@ -280,7 +281,7 @@ struct ContentView: View {
             TextField("Filter files", text: $filterText)
                 .textFieldStyle(.plain)
                 .font(.caption)
-                .help("Filter Files")
+                .quickTooltip("Filter Files")
 
             if !filterText.isEmpty {
                 Button {
@@ -291,7 +292,7 @@ struct ContentView: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
-                .help("Clear Filter")
+                .quickTooltip("Clear Filter")
                 .accessibilityLabel("Clear Filter")
             }
         }
@@ -314,7 +315,7 @@ struct ContentView: View {
             }
             .buttonStyle(.plain)
             .keyboardShortcut("o", modifiers: .command)
-            .help("Open Folder")
+            .quickTooltip("Open Folder")
             .accessibilityLabel("Open Folder")
 
             Button {
@@ -326,7 +327,7 @@ struct ContentView: View {
             }
             .buttonStyle(.plain)
             .disabled(library.folderURL == nil)
-            .help("Open Terminal Here")
+            .quickTooltip("Open Terminal Here")
             .accessibilityLabel("Open Terminal Here")
 
             Text(statusPathText)
@@ -472,6 +473,17 @@ struct ContentView: View {
         return trim
     }
 
+    private var selectedPreviewTrim: MediaTrim? {
+        if isTrimToolActive,
+           selectedCanTrim,
+           let duration = selectedStatus.duration {
+            let trim = selectedTrim.clamped(to: duration)
+            return trim.isFullLength(for: duration) ? nil : trim
+        }
+
+        return selectedAppliedTrim
+    }
+
     private var hasSelectedAppliedEdits: Bool {
         !selectedAppliedCrop.isFullFrame || selectedAppliedTrim != nil
     }
@@ -522,7 +534,7 @@ struct ContentView: View {
             .buttonStyle(.plain)
             .disabled(selectedItem == nil)
             .foregroundStyle(isCropToolActive ? Color.accentColor : Color.primary)
-            .help("Crop Tool")
+            .quickTooltip("Crop Tool")
             .accessibilityLabel("Crop Tool")
 
             Menu {
@@ -551,7 +563,7 @@ struct ContentView: View {
             }
             .buttonStyle(.plain)
             .disabled(selectedItem == nil)
-            .help("Crop Presets")
+            .quickTooltip("Crop Presets")
             .accessibilityLabel("Crop Presets")
 
             Button {
@@ -563,7 +575,7 @@ struct ContentView: View {
             }
             .buttonStyle(.plain)
             .disabled(selectedItem == nil || selectedCrop.isFullFrame)
-            .help("Reset Crop")
+            .quickTooltip("Reset Crop")
             .accessibilityLabel("Reset Crop")
 
             Divider()
@@ -584,7 +596,7 @@ struct ContentView: View {
             .buttonStyle(.plain)
             .disabled(!selectedCanTrim)
             .foregroundStyle(isTrimToolActive ? Color.accentColor : Color.primary)
-            .help("Trim Tool")
+            .quickTooltip("Trim Tool")
             .accessibilityLabel("Trim Tool")
 
             Button {
@@ -596,7 +608,7 @@ struct ContentView: View {
             }
             .buttonStyle(.plain)
             .disabled(!selectedCanTrim || selectedTrim.isFullLength(for: selectedStatus.duration))
-            .help("Reset Trim")
+            .quickTooltip("Reset Trim")
             .accessibilityLabel("Reset Trim")
 
             if isTrimToolActive, selectedCanTrim, let duration = selectedStatus.duration {
@@ -606,7 +618,6 @@ struct ContentView: View {
                     onApply: applySelectedTrim
                 )
                 .frame(width: 360)
-                .help("Trim Range")
             }
 
             Button {
@@ -618,7 +629,7 @@ struct ContentView: View {
             }
             .buttonStyle(.plain)
             .disabled(!hasSelectedPendingOrAppliedEdits)
-            .help("Undo Edits")
+            .quickTooltip("Undo Edits")
             .accessibilityLabel("Undo Edits")
 
             Divider()
@@ -638,7 +649,7 @@ struct ContentView: View {
             }
             .buttonStyle(.plain)
             .disabled(applyEditIsDisabled)
-            .help(isTrimToolActive ? "Apply Trim" : "Apply Crop")
+            .quickTooltip(isTrimToolActive ? "Apply Trim" : "Apply Crop")
             .accessibilityLabel(isTrimToolActive ? "Apply Trim" : "Apply Crop")
 
             Button {
@@ -650,7 +661,7 @@ struct ContentView: View {
             }
             .buttonStyle(.plain)
             .disabled(selectedItem == nil || !hasSelectedAppliedEdits)
-            .help("Move Edited Media to Pinned")
+            .quickTooltip("Move Edited Media to Pinned")
             .accessibilityLabel("Move Edited Media to Pinned")
 
             if !selectedCrop.isFullFrame || !selectedTrim.isFullLength(for: selectedStatus.duration) {
@@ -682,7 +693,7 @@ struct ContentView: View {
                     zoomMultiplier: zoomLevels[zoomIndex],
                     isCropToolActive: isCropToolActive,
                     appliedCrop: selectedAppliedCrop,
-                    appliedTrim: selectedAppliedTrim,
+                    appliedTrim: selectedPreviewTrim,
                     onApplyCrop: applySelectedCrop,
                     crop: cropBinding(for: item)
                 )
@@ -1300,28 +1311,37 @@ private struct TrimControls: View {
 
     @State private var startText = ""
     @State private var endText = ""
+    @FocusState private var focusedField: TimeField?
 
     var body: some View {
         HStack(spacing: 6) {
             TrimRangeSlider(trim: $trim, duration: duration)
                 .frame(width: 150, height: 24)
-                .help("Drag to Set Trim Start and End")
+                .quickTooltip("Drag to Set Trim Start and End")
                 .accessibilityLabel("Trim Range")
 
             TextField("Start", text: $startText)
                 .font(.caption.monospacedDigit())
                 .textFieldStyle(.roundedBorder)
-                .frame(width: 58)
+                .frame(width: 76)
+                .focused($focusedField, equals: .start)
                 .onSubmit(commitTextFields)
-                .help("Trim Start Time")
+                .onChange(of: startText) {
+                    commitTextField(.start)
+                }
+                .quickTooltip("Trim Start Time (MM:SS:CC)")
                 .accessibilityLabel("Trim Start Time")
 
             TextField("End", text: $endText)
                 .font(.caption.monospacedDigit())
                 .textFieldStyle(.roundedBorder)
-                .frame(width: 58)
+                .frame(width: 76)
+                .focused($focusedField, equals: .end)
                 .onSubmit(commitTextFields)
-                .help("Trim End Time")
+                .onChange(of: endText) {
+                    commitTextField(.end)
+                }
+                .quickTooltip("Trim End Time (MM:SS:CC)")
                 .accessibilityLabel("Trim End Time")
 
             Button {
@@ -1334,7 +1354,7 @@ private struct TrimControls: View {
             }
             .buttonStyle(.plain)
             .disabled(trim.isFullLength(for: duration))
-            .help("Apply Trim")
+            .quickTooltip("Apply Trim")
             .accessibilityLabel("Apply Trim")
         }
         .onAppear(perform: syncTextFields)
@@ -1349,8 +1369,12 @@ private struct TrimControls: View {
 
     private func syncTextFields() {
         let clamped = trim.clamped(to: duration)
-        startText = MediaTrim.format(clamped.start)
-        endText = MediaTrim.format(clamped.end)
+        if focusedField != .start {
+            startText = MediaTrim.format(clamped.start)
+        }
+        if focusedField != .end {
+            endText = MediaTrim.format(clamped.end)
+        }
     }
 
     private func commitTextFields() {
@@ -1358,16 +1382,33 @@ private struct TrimControls: View {
         let nextStart = parseTime(startText) ?? current.start
         let nextEnd = parseTime(endText) ?? current.end
         trim = MediaTrim(start: nextStart, end: nextEnd).clamped(to: duration)
+        focusedField = nil
         syncTextFields()
+    }
+
+    private func commitTextField(_ field: TimeField) {
+        guard focusedField == field else { return }
+
+        let current = trim.clamped(to: duration)
+        switch field {
+        case .start:
+            guard let nextStart = parseTime(startText) else { return }
+            trim = MediaTrim(start: nextStart, end: current.end).clamped(to: duration)
+        case .end:
+            guard let nextEnd = parseTime(endText) else { return }
+            trim = MediaTrim(start: current.start, end: nextEnd).clamped(to: duration)
+        }
     }
 
     private func parseTime(_ text: String) -> TimeInterval? {
         let parts = text
             .trimmingCharacters(in: .whitespacesAndNewlines)
-            .split(separator: ":")
+            .split(separator: ":", omittingEmptySubsequences: false)
             .map(String.init)
 
-        guard !parts.isEmpty else { return nil }
+        guard !parts.isEmpty,
+              parts.allSatisfy({ !$0.isEmpty })
+        else { return nil }
         if parts.count == 1 {
             return TimeInterval(parts[0])
         }
@@ -1377,12 +1418,24 @@ private struct TrimControls: View {
             return minutes * 60 + seconds
         }
         if parts.count == 3,
+           let minutes = TimeInterval(parts[0]),
+           let seconds = TimeInterval(parts[1]),
+           let centiseconds = TimeInterval(parts[2]) {
+            return minutes * 60 + seconds + centiseconds / 100
+        }
+        if parts.count == 4,
            let hours = TimeInterval(parts[0]),
            let minutes = TimeInterval(parts[1]),
-           let seconds = TimeInterval(parts[2]) {
-            return hours * 3600 + minutes * 60 + seconds
+           let seconds = TimeInterval(parts[2]),
+           let centiseconds = TimeInterval(parts[3]) {
+            return hours * 3600 + minutes * 60 + seconds + centiseconds / 100
         }
         return nil
+    }
+
+    private enum TimeField: Hashable {
+        case start
+        case end
     }
 }
 
@@ -1767,7 +1820,7 @@ private struct CropOverlay: View {
                             x: min(max(cropRect.maxX - 38, 42), geometry.size.width - 42),
                             y: min(max(cropRect.minY + 22, 22), geometry.size.height - 22)
                         )
-                        .help("Apply Crop")
+                        .quickTooltip("Apply Crop")
                     }
                 }
             }
