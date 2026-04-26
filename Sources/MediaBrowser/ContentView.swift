@@ -18,6 +18,8 @@ struct ContentView: View {
     @State private var editorMediaCategory: EditorMediaCategory = .media
     @State private var editorInspectorTab: EditorInspectorTab = .video
     @State private var editorPlayerTime: TimeInterval = 0
+    @State private var timelinePlaybackTime: TimeInterval = 0
+    @State private var timelineSeekRequest: TimelinePlaybackSeekRequest?
     @State private var isTimelineDropTargeted = false
     @State private var isTimelineSnappingEnabled = true
     @State private var timelineZoom = 1.0
@@ -100,13 +102,6 @@ struct ContentView: View {
             if pinnedItems.isEmpty, activePanel == .pinned {
                 activePanel = .thumbnail
             }
-        }
-        .onChange(of: selectedEditorClipID) {
-            selectedTimelineClipID = nil
-            editorPlayerTime = 0
-        }
-        .onChange(of: selectedTimelineClipID) {
-            editorPlayerTime = 0
         }
     }
 
@@ -504,6 +499,67 @@ struct ContentView: View {
         activeTimelineTrim?.duration ?? activeEditorClip?.status?.duration
     }
 
+    private var isShowingTimelinePlayback: Bool {
+        canPlayTimelineSequence
+    }
+
+    private var canPlayTimelineSequence: Bool {
+        !timelineClips.isEmpty
+            && timelineClips.allSatisfy { timelineClip in
+                editorClip(for: timelineClip)?.item.kind == .video
+            }
+    }
+
+    private var activeTimelineSourceClip: EditorClip? {
+        guard let selectedTimelineClip else {
+            return nil
+        }
+
+        return editorClip(for: selectedTimelineClip)
+    }
+
+    private var playerPaneTitle: String {
+        if isShowingTimelinePlayback {
+            if let activeTimelineSourceClip {
+                return activeTimelineSourceClip.item.fileName
+            }
+
+            return "Timeline"
+        }
+
+        return activeEditorClip?.item.fileName ?? "No Clip"
+    }
+
+    private var playerPaneDurationText: String? {
+        if isShowingTimelinePlayback {
+            return "\(MediaTrim.format(timelinePlaybackTime)) / \(MediaTrim.format(actualTimelineDuration))"
+        }
+
+        guard let duration = activeEditorDisplayedDuration else {
+            return nil
+        }
+
+        return "\(MediaTrim.format(activeEditorDisplayedTime)) / \(MediaTrim.format(duration))"
+    }
+
+    private var timelinePlaybackClips: [TimelinePlaybackClip] {
+        timelineClips.compactMap { timelineClip in
+            guard let sourceClip = editorClip(for: timelineClip),
+                  sourceClip.item.kind == .video
+            else {
+                return nil
+            }
+
+            let adjustments = timelineClip.adjustments
+            return TimelinePlaybackClip(
+                id: timelineClip.id,
+                url: sourceClip.item.url,
+                trim: timelineClip.trim,
+                volume: adjustments.isMuted ? 0 : Float(adjustments.volume)
+            )
+        }
+    }
+
     private var timelinePixelsPerSecond: CGFloat {
         timelineBasePixelsPerSecond * CGFloat(timelineZoom)
     }
@@ -809,14 +865,14 @@ struct ContentView: View {
     private var playerPane: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                Text(activeEditorClip?.item.fileName ?? "No Clip")
+                Text(playerPaneTitle)
                     .font(.headline)
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .frame(maxWidth: .infinity, alignment: .leading)
 
-                if let duration = activeEditorDisplayedDuration {
-                    Text("\(MediaTrim.format(activeEditorDisplayedTime)) / \(MediaTrim.format(duration))")
+                if let durationText = playerPaneDurationText {
+                    Text(durationText)
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -832,7 +888,13 @@ struct ContentView: View {
             ZStack {
                 Color.black.opacity(0.92)
 
-                if let clip = activeEditorClip {
+                if isShowingTimelinePlayback {
+                    TimelineSequenceVideoView(
+                        clips: timelinePlaybackClips,
+                        seekRequest: timelineSeekRequest,
+                        onPlaybackPositionChange: handleTimelinePlaybackPosition
+                    )
+                } else if let clip = activeEditorClip {
                     PreviewPane(
                         item: clip.item,
                         zoomMultiplier: 1,
@@ -1867,7 +1929,34 @@ struct ContentView: View {
 
     private func selectTimelineClip(_ timelineClip: EditorTimelineClip) {
         selectedTimelineClipID = timelineClip.id
-        editorPlayerTime = 0
+        selectedEditorClipID = nil
+
+        let timelineStart = timelineStartTime(for: timelineClip)
+        timelinePlaybackTime = timelineStart
+        timelineSeekRequest = TimelinePlaybackSeekRequest(time: timelineStart)
+
+        if let duration = editorClip(for: timelineClip)?.status?.duration {
+            editorPlayerTime = timelineTrim(for: timelineClip, duration: duration).start
+        } else {
+            editorPlayerTime = 0
+        }
+    }
+
+    private func handleTimelinePlaybackPosition(_ position: TimelinePlaybackPosition) {
+        timelinePlaybackTime = position.timelineTime
+
+        guard let clipID = position.clipID,
+              timelineClips.contains(where: { $0.id == clipID })
+        else {
+            return
+        }
+
+        if selectedTimelineClipID != clipID {
+            selectedTimelineClipID = clipID
+            selectedEditorClipID = nil
+        }
+
+        editorPlayerTime = position.sourceTime
     }
 
     private func addActiveThumbnailToEditorClips() -> Bool {
@@ -1900,7 +1989,13 @@ struct ContentView: View {
         }
         if let selectedTimelineClipID,
            !timelineClips.contains(where: { $0.id == selectedTimelineClipID }) {
-            self.selectedTimelineClipID = timelineClips.first?.id
+            if let firstTimelineClip = timelineClips.first {
+                selectTimelineClip(firstTimelineClip)
+            } else {
+                self.selectedTimelineClipID = nil
+                timelinePlaybackTime = 0
+                editorPlayerTime = 0
+            }
         }
     }
 
@@ -1967,10 +2062,14 @@ struct ContentView: View {
         return timelineTrim(for: clip, duration: duration).duration
     }
 
-    private var totalTimelineDuration: TimeInterval {
-        max(timelineClips.reduce(TimeInterval(0)) { total, clip in
+    private var actualTimelineDuration: TimeInterval {
+        timelineClips.reduce(TimeInterval(0)) { total, clip in
             total + timelineDuration(for: clip)
-        }, 30)
+        }
+    }
+
+    private var totalTimelineDuration: TimeInterval {
+        max(actualTimelineDuration, 30)
     }
 
     private var timelineMarkerInterval: TimeInterval {
@@ -1990,7 +2089,31 @@ struct ContentView: View {
         min(max(CGFloat(timelineDuration(for: clip)) * timelinePixelsPerSecond, 80), 700)
     }
 
+    private func timelineStartTime(for targetClip: EditorTimelineClip) -> TimeInterval {
+        var cursor = TimeInterval(0)
+        for clip in timelineClips {
+            if clip.id == targetClip.id {
+                return cursor
+            }
+            cursor += timelineDuration(for: clip)
+        }
+
+        return 0
+    }
+
+    private func timelineRange(for targetClip: EditorTimelineClip) -> ClosedRange<TimeInterval> {
+        let start = timelineStartTime(for: targetClip)
+        return start...max(start, start + timelineDuration(for: targetClip))
+    }
+
     private func timelinePlayheadProgress(for clip: EditorTimelineClip) -> Double? {
+        let range = timelineRange(for: clip)
+        if timelinePlaybackTime >= range.lowerBound,
+           (timelinePlaybackTime < range.upperBound || timelineClips.last?.id == clip.id),
+           range.upperBound > range.lowerBound {
+            return min(max((timelinePlaybackTime - range.lowerBound) / (range.upperBound - range.lowerBound), 0), 1)
+        }
+
         guard selectedTimelineClipID == clip.id,
               let duration = editorClip(for: clip)?.status?.duration,
               duration > 0
@@ -1999,10 +2122,7 @@ struct ContentView: View {
         }
 
         let trim = timelineTrim(for: clip, duration: duration)
-        guard trim.duration > 0 else {
-            return nil
-        }
-
+        guard trim.duration > 0 else { return nil }
         return min(max((editorPlayerTime - trim.start) / trim.duration, 0), 1)
     }
 
@@ -2064,6 +2184,9 @@ struct ContentView: View {
 
         if selectedTimelineClipID == clip.id {
             editorPlayerTime = min(max(editorPlayerTime, snapped.start), snapped.end)
+            let timelineTime = timelineStartTime(for: timelineClips[index]) + max(0, editorPlayerTime - snapped.start)
+            timelinePlaybackTime = timelineTime
+            timelineSeekRequest = TimelinePlaybackSeekRequest(time: timelineTime)
         }
     }
 
@@ -2077,6 +2200,9 @@ struct ContentView: View {
 
         timelineClips[index].trim = nil
         editorPlayerTime = min(max(editorPlayerTime, 0), duration)
+        let timelineTime = timelineStartTime(for: timelineClips[index]) + editorPlayerTime
+        timelinePlaybackTime = timelineTime
+        timelineSeekRequest = TimelinePlaybackSeekRequest(time: timelineTime)
     }
 
     private func splitSelectedTimelineClip() {
@@ -2103,6 +2229,8 @@ struct ContentView: View {
         timelineClips.insert(rightClip, at: timelineClips.index(after: index))
         selectTimelineClip(rightClip)
         editorPlayerTime = splitTime
+        timelinePlaybackTime = timelineStartTime(for: rightClip)
+        timelineSeekRequest = TimelinePlaybackSeekRequest(time: timelinePlaybackTime)
     }
 
     private func activeEditorPreviewID(for clip: EditorClip) -> String {
@@ -2155,9 +2283,11 @@ struct ContentView: View {
         if selectedTimelineClipID == clip.id {
             if let removedIndex, !timelineClips.isEmpty {
                 let nextIndex = min(removedIndex, timelineClips.index(before: timelineClips.endIndex))
-                selectedTimelineClipID = timelineClips[nextIndex].id
+                selectTimelineClip(timelineClips[nextIndex])
             } else {
                 selectedTimelineClipID = nil
+                timelinePlaybackTime = 0
+                editorPlayerTime = 0
             }
         }
     }

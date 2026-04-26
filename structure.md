@@ -56,8 +56,9 @@ ContentView
    │  │     │  ├─ Media / Music / Text / Transitions / Movement tabs
    │  │     │  └─ EditorClipCard grid
    │  │     ├─ playerPane
-   │  │     │  ├─ selected media-bin or timeline clip header
-   │  │     │  └─ PreviewPane
+   │  │     │  ├─ selected media-bin clip or active timeline clip header
+   │  │     │  ├─ PreviewPane for media-bin preview
+   │  │     │  └─ TimelineSequenceVideoView for full timeline playback
    │  │     ├─ inspectorPane
    │  │     │  ├─ Video / Image / Audio / Adjust tabs
    │  │     │  ├─ Reframe controls
@@ -144,14 +145,23 @@ Timeline clip instances are owned separately as `timelineClips`. Dragging an
 `EditorClipCard` from `clipsPane` into `timelinePane`, or choosing `Add to Timeline` from
 the clip context menu, creates a new `EditorTimelineClip` with its own UUID so the same
 media-bin clip can appear on the timeline more than once. `selectedTimelineClipID` drives
-timeline block highlighting, player preview selection, and the playhead indicator in the
-selected `TimelineClipBlock`.
+timeline block highlighting and inspector selection. Timeline playback also updates
+`selectedTimelineClipID` as the playhead crosses clip boundaries, so the active
+`TimelineClipBlock` is highlighted while the full sequence plays.
 
 Each `EditorTimelineClip` may also carry its own `MediaTrim`. Timeline trim handles update
 that per-instance trim, the player previews the selected timeline trim, and Split Clip
 creates two timeline instances split at the current player time. `isTimelineSnappingEnabled`
 snaps trim and split times to half-second increments, and `timelineZoom` controls timeline
 clip width and ruler scale without changing media timing.
+
+The editor player has two playback paths. When a media-bin clip is selected,
+`playerPane` still uses `PreviewPane` for single-clip preview. When a timeline clip is
+selected, `playerPane` uses `TimelineSequenceVideoView` from `NativeMediaViews.swift` to
+build an in-memory AV composition from the full video timeline. `timelinePlaybackTime`
+stores the sequence playhead time, `timelineSeekRequest` seeks the sequence when a timeline
+block is selected, and `TimelinePlaybackPosition` maps sequence time back to the active
+timeline clip and source media time for highlighting, split, and trim behavior.
 
 Phase 4 timeline export is handled by `MediaExport.exportTimeline`. `ContentView` converts
 `timelineClips` into `TimelineExportClip` values, including clip trims and audio volume /
@@ -172,6 +182,7 @@ state for the next render/effects pass.
 - `statusBar`: `Sources/MediaBrowser/ContentView.swift`
 - `mainPanel`, `mainPanelTabBar`, `editingToolbar`, `previewPanel`: `Sources/MediaBrowser/ContentView.swift`
 - `videoEditorPanel`, `clipsPane`, `playerPane`, `inspectorPane`, `timelinePane`: `Sources/MediaBrowser/ContentView.swift`
+- `TimelineSequenceVideoView`: `Sources/MediaBrowser/NativeMediaViews.swift`
 - timeline export: `Sources/MediaBrowser/MediaEditing.swift`
 - `TrimControls`: `Sources/MediaBrowser/ContentView.swift`
 - `PreviewPane`: `Sources/MediaBrowser/ContentView.swift`
