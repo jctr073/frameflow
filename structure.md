@@ -53,34 +53,26 @@ ContentView
    │  │     ├─ clipsPane
    │  │     │  ├─ Clips header
    │  │     │  ├─ Import Clips button
-   │  │     │  ├─ Media / Music / Text / Transitions / Movement tabs
    │  │     │  └─ EditorClipCard grid
    │  │     ├─ playerPane
    │  │     │  ├─ selected media-bin clip or active timeline clip header
+   │  │     │  ├─ selected timeline clip audio mute / volume controls
    │  │     │  ├─ PreviewPane for media-bin preview
    │  │     │  └─ TimelineSequenceVideoView for full timeline playback
-   │  │     ├─ inspectorPane
-   │  │     │  ├─ Video / Image / Audio / Adjust tabs
-   │  │     │  ├─ Reframe controls
-   │  │     │  ├─ Keyframe controls
-   │  │     │  ├─ Stabilization / horizon controls
-   │  │     │  ├─ Audio controls
-   │  │     │  └─ Color / exposure controls
    │  │     └─ timelinePane
    │  │        ├─ timeline toolbar
    │  │        │  ├─ Export Timeline
    │  │        │  ├─ Reset Timeline Trim
    │  │        │  ├─ Split Clip
-   │  │        │  ├─ Snap toggle
    │  │        │  ├─ Delete Timeline Clip
    │  │        │  └─ Timeline Zoom slider
    │  │        ├─ timelineRuler
    │  │        ├─ Video track drop target
    │  │        │  └─ TimelineClipBlock list
    │  │        │     ├─ selected playhead indicator
+   │  │        │     ├─ drag-to-reorder behavior
    │  │        │     ├─ trim start handle
    │  │        │     └─ trim end handle
-   │  │        └─ Audio track placeholder
    │  │
    │  └─ pinnedPanel
    │     ├─ Pinned header toolbar
@@ -145,15 +137,16 @@ Timeline clip instances are owned separately as `timelineClips`. Dragging an
 `EditorClipCard` from `clipsPane` into `timelinePane`, or choosing `Add to Timeline` from
 the clip context menu, creates a new `EditorTimelineClip` with its own UUID so the same
 media-bin clip can appear on the timeline more than once. `selectedTimelineClipID` drives
-timeline block highlighting and inspector selection. Timeline playback also updates
+timeline block highlighting and the compact audio controls in `playerPane`. Timeline
+clips can also be reordered by dragging `TimelineClipBlock` instances within the video
+track. Timeline playback also updates
 `selectedTimelineClipID` as the playhead crosses clip boundaries, so the active
 `TimelineClipBlock` is highlighted while the full sequence plays.
 
 Each `EditorTimelineClip` may also carry its own `MediaTrim`. Timeline trim handles update
 that per-instance trim, the player previews the selected timeline trim, and Split Clip
-creates two timeline instances split at the current player time. `isTimelineSnappingEnabled`
-snaps trim and split times to half-second increments, and `timelineZoom` controls timeline
-clip width and ruler scale without changing media timing.
+creates two timeline instances split at the current player time. `timelineZoom` controls
+timeline clip width and ruler scale without changing media timing.
 
 The editor player has two playback paths. When a media-bin clip is selected,
 `playerPane` still uses `PreviewPane` for single-clip preview. When a timeline clip is
@@ -168,10 +161,9 @@ Phase 4 timeline export is handled by `MediaExport.exportTimeline`. `ContentView
 mute state, then saves a stitched MP4 through `AVMutableComposition`. Export currently
 supports video timeline clips.
 
-The right-side `inspectorPane` stores per-timeline-clip `EditorTimelineAdjustments`,
-including reframe, keyframe, stabilization, horizon, audio, and color/exposure settings.
-The current export path honors audio mute/volume; visual adjustment rendering is stored in
-state for the next render/effects pass.
+Per-timeline-clip `EditorTimelineAdjustments` still stores render settings. The visible
+editor control surface currently exposes audio mute/volume in `playerPane`, and export
+honors those audio settings.
 
 ## Code Anchors
 
@@ -181,7 +173,7 @@ state for the next render/effects pass.
 - `pinnedPanel`: `Sources/MediaBrowser/ContentView.swift`
 - `statusBar`: `Sources/MediaBrowser/ContentView.swift`
 - `mainPanel`, `mainPanelTabBar`, `editingToolbar`, `previewPanel`: `Sources/MediaBrowser/ContentView.swift`
-- `videoEditorPanel`, `clipsPane`, `playerPane`, `inspectorPane`, `timelinePane`: `Sources/MediaBrowser/ContentView.swift`
+- `videoEditorPanel`, `clipsPane`, `playerPane`, `timelinePane`: `Sources/MediaBrowser/ContentView.swift`
 - `TimelineSequenceVideoView`: `Sources/MediaBrowser/NativeMediaViews.swift`
 - timeline export: `Sources/MediaBrowser/MediaEditing.swift`
 - `TrimControls`: `Sources/MediaBrowser/ContentView.swift`

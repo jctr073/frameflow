@@ -5,6 +5,12 @@ import SwiftUI
 import UniformTypeIdentifiers
 import WebKit
 
+private enum PlaybackTheme {
+    static let controlBackground = Color.black.opacity(0.72)
+    static let controlBorder = Color.white.opacity(0.10)
+    static let secondaryText = Color.white.opacity(0.62)
+}
+
 struct NativeImageView: NSViewRepresentable {
     let url: URL
     let animates: Bool
@@ -271,7 +277,7 @@ private struct NativeVideoControls: View {
 
             Text(MediaTrim.format(controller.currentTime))
                 .font(.system(size: 15, weight: .semibold, design: .monospaced))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(PlaybackTheme.secondaryText)
                 .lineLimit(1)
                 .quickTooltip("Current Video Time", placement: .above)
                 .accessibilityLabel("Current Video Time")
@@ -290,7 +296,7 @@ private struct NativeVideoControls: View {
 
             Text(MediaTrim.format(controller.playbackEnd))
                 .font(.system(size: 15, weight: .semibold, design: .monospaced))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(PlaybackTheme.secondaryText)
                 .lineLimit(1)
                 .quickTooltip("Video End Time", placement: .above)
                 .accessibilityLabel("Video End Time")
@@ -299,8 +305,11 @@ private struct NativeVideoControls: View {
         .foregroundStyle(.white)
         .padding(.horizontal, 18)
         .padding(.vertical, 10)
-        .background(.ultraThinMaterial, in: Capsule())
-        .shadow(color: .black.opacity(0.18), radius: 12, y: 5)
+        .background(PlaybackTheme.controlBackground, in: RoundedRectangle(cornerRadius: 8))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(PlaybackTheme.controlBorder, lineWidth: 1)
+        }
     }
 }
 
@@ -340,7 +349,7 @@ struct TimelineSequenceVideoView: View {
             } else if clips.isEmpty || controller.duration <= 0 {
                 Text("No playable video clips.")
                     .font(.title3)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(PlaybackTheme.secondaryText)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
@@ -410,7 +419,7 @@ private struct TimelineSequenceVideoControls: View {
 
             Text(MediaTrim.format(controller.currentTime))
                 .font(.system(size: 15, weight: .semibold, design: .monospaced))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(PlaybackTheme.secondaryText)
                 .lineLimit(1)
                 .quickTooltip("Current Timeline Time", placement: .above)
                 .accessibilityLabel("Current Timeline Time")
@@ -430,7 +439,7 @@ private struct TimelineSequenceVideoControls: View {
 
             Text(MediaTrim.format(controller.duration))
                 .font(.system(size: 15, weight: .semibold, design: .monospaced))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(PlaybackTheme.secondaryText)
                 .lineLimit(1)
                 .quickTooltip("Timeline Duration", placement: .above)
                 .accessibilityLabel("Timeline Duration")
@@ -439,8 +448,11 @@ private struct TimelineSequenceVideoControls: View {
         .foregroundStyle(.white)
         .padding(.horizontal, 18)
         .padding(.vertical, 10)
-        .background(.ultraThinMaterial, in: Capsule())
-        .shadow(color: .black.opacity(0.18), radius: 12, y: 5)
+        .background(PlaybackTheme.controlBackground, in: RoundedRectangle(cornerRadius: 8))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(PlaybackTheme.controlBorder, lineWidth: 1)
+        }
     }
 }
 

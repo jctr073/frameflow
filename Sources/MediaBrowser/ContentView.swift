@@ -2,6 +2,56 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
+private enum EditorTheme {
+    static let windowBackground = Color(red: 0.015, green: 0.017, blue: 0.018)
+    static let canvasBackground = Color(red: 0.055, green: 0.060, blue: 0.064)
+    static let panelBackground = Color(red: 0.075, green: 0.080, blue: 0.084)
+    static let panelRaised = Color(red: 0.105, green: 0.110, blue: 0.115)
+    static let toolbarBackground = Color(red: 0.095, green: 0.100, blue: 0.105)
+    static let timelineBackground = Color(red: 0.060, green: 0.065, blue: 0.068)
+    static let trackBackground = Color(red: 0.070, green: 0.076, blue: 0.080)
+    static let trackAlternateBackground = Color(red: 0.080, green: 0.086, blue: 0.090)
+    static let thumbnailWell = Color.black.opacity(0.74)
+    static let clipBlue = Color(red: 0.135, green: 0.350, blue: 0.650)
+    static let clipBlueSelected = Color(red: 0.165, green: 0.445, blue: 0.805)
+    static let accent = Color(red: 1.000, green: 0.820, blue: 0.000)
+    static let primaryText = Color.white.opacity(0.92)
+    static let secondaryText = Color.white.opacity(0.56)
+    static let mutedText = Color.white.opacity(0.36)
+    static let hairline = Color.white.opacity(0.070)
+}
+
+private enum EditorDragPayload {
+    static let editorClipPrefix = "editor-clip:"
+    static let timelineClipPrefix = "timeline-clip:"
+
+    static func editorClipPayload(for clipID: EditorClip.ID) -> String {
+        "\(editorClipPrefix)\(clipID.absoluteString)"
+    }
+
+    static func timelineClipPayload(for clipID: EditorTimelineClip.ID) -> String {
+        "\(timelineClipPrefix)\(clipID.uuidString)"
+    }
+
+    static func editorClipID(from payload: String) -> EditorClip.ID? {
+        if payload.hasPrefix(editorClipPrefix) {
+            let rawValue = String(payload.dropFirst(editorClipPrefix.count))
+            return URL(string: rawValue)
+        }
+
+        return URL(string: payload)
+    }
+
+    static func timelineClipID(from payload: String) -> EditorTimelineClip.ID? {
+        guard payload.hasPrefix(timelineClipPrefix) else {
+            return nil
+        }
+
+        let rawValue = String(payload.dropFirst(timelineClipPrefix.count))
+        return UUID(uuidString: rawValue)
+    }
+}
+
 struct ContentView: View {
     @StateObject private var library = MediaLibrary()
     @ObservedObject private var mainPanelState: MainPanelState
@@ -15,13 +65,11 @@ struct ContentView: View {
     @State private var selectedEditorClipID: EditorClip.ID?
     @State private var timelineClips: [EditorTimelineClip] = []
     @State private var selectedTimelineClipID: EditorTimelineClip.ID?
-    @State private var editorMediaCategory: EditorMediaCategory = .media
-    @State private var editorInspectorTab: EditorInspectorTab = .video
+    @State private var draggingTimelineClipID: EditorTimelineClip.ID?
     @State private var editorPlayerTime: TimeInterval = 0
     @State private var timelinePlaybackTime: TimeInterval = 0
     @State private var timelineSeekRequest: TimelinePlaybackSeekRequest?
     @State private var isTimelineDropTargeted = false
-    @State private var isTimelineSnappingEnabled = true
     @State private var timelineZoom = 1.0
     @State private var isExportingTimeline = false
     @State private var activePanel: SidePanel = .thumbnail
@@ -40,7 +88,7 @@ struct ContentView: View {
     private let zoomLevels = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0]
     private let sidePanelRowInsets = EdgeInsets(top: 8, leading: 18, bottom: 8, trailing: 18)
     private let topToolbarHeight: CGFloat = 48
-    private let timelineBasePixelsPerSecond: CGFloat = 7
+    private let timelineBasePixelsPerSecond: CGFloat = 12
 
     init(initialFolderURL: URL?, mainPanelState: MainPanelState) {
         self.initialFolderURL = initialFolderURL
@@ -48,7 +96,7 @@ struct ContentView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
+        VStack(spacing: 6) {
             HSplitView {
                 thumbnailPanel
                     .frame(minWidth: 132, idealWidth: 170, maxWidth: 260)
@@ -64,7 +112,11 @@ struct ContentView: View {
 
             statusBar
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .padding(6)
+        .background(EditorTheme.windowBackground)
+        .tint(EditorTheme.accent)
+        .accentColor(EditorTheme.accent)
+        .preferredColorScheme(.dark)
         .overlay(dropOverlay)
         .quickTooltipOverlay()
         .background(KeyboardMonitor(onKeyDown: handleKeyDown).frame(width: 0, height: 0))
@@ -113,7 +165,7 @@ struct ContentView: View {
             if visibleThumbnailEntries.isEmpty {
                 Text(thumbnailEmptyMessage)
                     .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(EditorTheme.secondaryText)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .padding()
@@ -161,6 +213,8 @@ struct ContentView: View {
                         }
                     }
                     .listStyle(.sidebar)
+                    .scrollContentBackground(.hidden)
+                    .background(EditorTheme.panelBackground)
                     .overlay(panelFocusOverlay(for: .thumbnail))
                     .onChange(of: thumbnailSelectionID) {
                         guard let thumbnailSelectionID else { return }
@@ -171,7 +225,7 @@ struct ContentView: View {
                 }
             }
         }
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background(EditorTheme.panelBackground)
     }
 
     private var pinnedPanel: some View {
@@ -211,14 +265,17 @@ struct ContentView: View {
 
                 Text("\(pinnedItems.count)")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(EditorTheme.secondaryText)
                     .help("\(pinnedItems.count) Pinned Files")
             }
             .frame(height: topToolbarHeight)
             .padding(.horizontal, 10)
-            .background(.bar)
+            .foregroundStyle(EditorTheme.primaryText)
+            .background(EditorTheme.toolbarBackground)
             .overlay(alignment: .bottom) {
-                Divider()
+                Rectangle()
+                    .fill(EditorTheme.hairline)
+                    .frame(height: 1)
             }
 
             ScrollViewReader { proxy in
@@ -248,6 +305,8 @@ struct ContentView: View {
                     }
                 }
                 .listStyle(.sidebar)
+                .scrollContentBackground(.hidden)
+                .background(EditorTheme.panelBackground)
                 .overlay(panelFocusOverlay(for: .pinned))
                 .onChange(of: library.selectedID) {
                     guard activePanel == .pinned,
@@ -262,7 +321,7 @@ struct ContentView: View {
                 }
             }
         }
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background(EditorTheme.panelBackground)
     }
 
     private var folderHeader: some View {
@@ -289,9 +348,12 @@ struct ContentView: View {
         .frame(height: topToolbarHeight)
         .padding(.leading, 10)
         .padding(.trailing, 8)
-        .background(.bar)
+        .foregroundStyle(EditorTheme.primaryText)
+        .background(EditorTheme.toolbarBackground)
         .overlay(alignment: .bottom) {
-            Divider()
+            Rectangle()
+                .fill(EditorTheme.hairline)
+                .frame(height: 1)
         }
     }
 
@@ -299,7 +361,7 @@ struct ContentView: View {
         HStack(spacing: 6) {
             Image(systemName: "line.3.horizontal.decrease.circle")
                 .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(EditorTheme.secondaryText)
 
             TextField("Filter files", text: $filterText)
                 .textFieldStyle(.plain)
@@ -312,7 +374,7 @@ struct ContentView: View {
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(EditorTheme.secondaryText)
                 }
                 .buttonStyle(.plain)
                 .quickTooltip("Clear Filter")
@@ -321,9 +383,12 @@ struct ContentView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
-        .background(Color(nsColor: .controlBackgroundColor))
+        .foregroundStyle(EditorTheme.primaryText)
+        .background(EditorTheme.panelBackground)
         .overlay(alignment: .bottom) {
-            Divider()
+            Rectangle()
+                .fill(EditorTheme.hairline)
+                .frame(height: 1)
         }
     }
 
@@ -355,7 +420,7 @@ struct ContentView: View {
 
             Text(statusPathText)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(EditorTheme.secondaryText)
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -364,23 +429,26 @@ struct ContentView: View {
             if !selectedStatus.detailText.isEmpty {
                 Text(selectedStatus.detailText)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(EditorTheme.secondaryText)
                     .lineLimit(1)
                     .help(selectedStatus.detailText)
             }
 
             Text(statusCountText)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(EditorTheme.secondaryText)
                 .lineLimit(1)
                 .help(statusCountText)
         }
         .frame(height: 28)
         .padding(.leading, 8)
         .padding(.trailing, 12)
-        .background(.bar)
+        .foregroundStyle(EditorTheme.primaryText)
+        .background(EditorTheme.toolbarBackground)
         .overlay(alignment: .top) {
-            Divider()
+            Rectangle()
+                .fill(EditorTheme.hairline)
+                .frame(height: 1)
         }
     }
 
@@ -672,38 +740,67 @@ struct ContentView: View {
 
             activeMainPanelContent
         }
+        .background(EditorTheme.canvasBackground)
     }
 
     private var mainPanelTabBar: some View {
-        HStack(spacing: 6) {
-            ForEach(visibleEditorTabs) { tab in
-                let isActive = mainPanelState.activeTab == tab
-                Button {
-                    mainPanelState.activate(tab)
-                } label: {
-                    Label(tab.title, systemImage: tab.systemImage)
-                        .font(.caption.weight(.semibold))
-                        .labelStyle(.titleAndIcon)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .frame(minWidth: 92)
-                        .background(
-                            RoundedRectangle(cornerRadius: 6)
-                                .fill(isActive ? Color.accentColor.opacity(0.16) : Color.clear)
-                        )
+        HStack(spacing: 10) {
+            Spacer(minLength: 0)
+
+            HStack(spacing: 2) {
+                ForEach(visibleEditorTabs) { tab in
+                    let isActive = mainPanelState.activeTab == tab
+                    Button {
+                        mainPanelState.activate(tab)
+                    } label: {
+                        Text(tab.editorTabTitle)
+                            .font(.caption.weight(.semibold))
+                            .lineLimit(1)
+                            .frame(minWidth: 82)
+                            .padding(.vertical, 6)
+                            .background(
+                                RoundedRectangle(cornerRadius: 7)
+                                    .fill(isActive ? EditorTheme.panelRaised : Color.clear)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(isActive ? EditorTheme.accent : EditorTheme.secondaryText)
+                    .accessibilityLabel(tab.title)
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(isActive ? Color.accentColor : Color.primary)
-                .accessibilityLabel(tab.title)
             }
+            .padding(2)
+            .background(EditorTheme.panelBackground, in: RoundedRectangle(cornerRadius: 9))
 
             Spacer(minLength: 0)
+
+            Button {
+                exportTimeline()
+            } label: {
+                if isExportingTimeline {
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(width: 68, height: 28)
+                } else {
+                    Label("Export", systemImage: "square.and.arrow.up")
+                        .font(.caption.weight(.bold))
+                        .labelStyle(.titleAndIcon)
+                        .frame(width: 78, height: 28)
+                }
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Color.black)
+            .background(EditorTheme.accent, in: RoundedRectangle(cornerRadius: 7))
+            .disabled(timelineClips.isEmpty || isExportingTimeline)
+            .quickTooltip("Export Timeline")
+            .accessibilityLabel("Export Timeline")
         }
-        .frame(height: 36)
+        .frame(height: 44)
         .padding(.horizontal, 10)
-        .background(.bar)
+        .background(EditorTheme.windowBackground)
         .overlay(alignment: .bottom) {
-            Divider()
+            Rectangle()
+                .fill(EditorTheme.hairline)
+                .frame(height: 1)
         }
     }
 
@@ -732,81 +829,51 @@ struct ContentView: View {
 
                 playerPane
                     .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
-
-                inspectorPane
-                    .frame(minWidth: 210, idealWidth: 240, maxWidth: 300)
             }
             .frame(minHeight: 280, maxHeight: .infinity)
 
             timelinePane
-                .frame(minHeight: 128, idealHeight: 170, maxHeight: 260)
+                .frame(minHeight: 88, idealHeight: 116, maxHeight: 150)
         }
-        .background(Color(nsColor: .underPageBackgroundColor))
+        .background(EditorTheme.canvasBackground)
     }
 
     private var clipsPane: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                Text("Clips")
-                    .font(.headline)
+                Text("Project Media")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(EditorTheme.accent)
                     .frame(maxWidth: .infinity, alignment: .leading)
 
                 Button {
                     importEditorClips()
                 } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 13, weight: .semibold))
-                        .frame(width: 24, height: 24)
+                    Label("Import", systemImage: "plus")
+                        .font(.caption.weight(.semibold))
+                        .labelStyle(.titleAndIcon)
+                        .padding(.horizontal, 9)
+                        .frame(height: 28)
                 }
                 .buttonStyle(.plain)
+                .foregroundStyle(EditorTheme.accent)
+                .background(EditorTheme.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
                 .quickTooltip("Import Clips")
                 .accessibilityLabel("Import Clips")
             }
             .frame(height: topToolbarHeight)
             .padding(.horizontal, 10)
-            .background(.bar)
+            .background(EditorTheme.toolbarBackground)
             .overlay(alignment: .bottom) {
-                Divider()
+                Rectangle()
+                    .fill(EditorTheme.hairline)
+                    .frame(height: 1)
             }
 
-            HStack(spacing: 4) {
-                ForEach(EditorMediaCategory.allCases) { category in
-                    Button {
-                        editorMediaCategory = category
-                    } label: {
-                        VStack(spacing: 3) {
-                            Image(systemName: category.systemImage)
-                                .font(.system(size: 13, weight: .semibold))
-                                .frame(width: 18, height: 18)
-
-                            Text(category.title)
-                                .font(.system(size: 9, weight: .semibold))
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.75)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 7)
-                        .background(
-                            RoundedRectangle(cornerRadius: 6)
-                                .fill(editorMediaCategory == category ? Color.accentColor.opacity(0.16) : Color.clear)
-                        )
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(editorMediaCategory == category ? Color.accentColor : Color.secondary)
-                    .quickTooltip(category.title)
-                    .accessibilityLabel(category.title)
-                }
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 8)
-            .overlay(alignment: .bottom) {
-                Divider()
-            }
-
-            if visibleEditorClips.isEmpty {
-                Text(editorMediaCategory.emptyMessage)
+            if editorClips.isEmpty {
+                Text("Import media to start building a timeline.")
                     .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(EditorTheme.secondaryText)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .padding()
@@ -816,7 +883,7 @@ struct ContentView: View {
                         columns: [GridItem(.adaptive(minimum: 94, maximum: 132), spacing: 10)],
                         spacing: 12
                     ) {
-                        ForEach(visibleEditorClips) { clip in
+                        ForEach(editorClips) { clip in
                             Button {
                                 selectedTimelineClipID = nil
                                 selectedEditorClipID = clip.id
@@ -850,43 +917,40 @@ struct ContentView: View {
                 }
             }
         }
-        .background(Color(nsColor: .controlBackgroundColor))
-    }
-
-    private var visibleEditorClips: [EditorClip] {
-        switch editorMediaCategory {
-        case .media:
-            return editorClips
-        case .music, .text, .transitions, .movement:
-            return []
-        }
+        .background(EditorTheme.panelBackground)
     }
 
     private var playerPane: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
+            HStack(spacing: 10) {
                 Text(playerPaneTitle)
-                    .font(.headline)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(EditorTheme.mutedText)
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .help(playerPaneTitle)
 
                 if let durationText = playerPaneDurationText {
                     Text(durationText)
                         .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(EditorTheme.secondaryText)
                         .lineLimit(1)
                 }
+
+                playerAudioControls
             }
             .frame(height: topToolbarHeight)
             .padding(.horizontal, 12)
-            .background(.bar)
+            .background(EditorTheme.toolbarBackground)
             .overlay(alignment: .bottom) {
-                Divider()
+                Rectangle()
+                    .fill(EditorTheme.hairline)
+                    .frame(height: 1)
             }
 
             ZStack {
-                Color.black.opacity(0.92)
+                EditorTheme.windowBackground
 
                 if isShowingTimelinePlayback {
                     TimelineSequenceVideoView(
@@ -909,232 +973,86 @@ struct ContentView: View {
                 } else {
                     Text("No clips added.")
                         .font(.title3)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(EditorTheme.secondaryText)
                 }
             }
         }
-        .background(Color(nsColor: .underPageBackgroundColor))
+        .background(EditorTheme.windowBackground)
     }
 
-    private var inspectorPane: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 4) {
-                ForEach(EditorInspectorTab.allCases) { tab in
-                    Button {
-                        editorInspectorTab = tab
-                    } label: {
-                        Text(tab.title)
-                            .font(.system(size: 10, weight: .semibold))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.75)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 7)
-                            .background(
-                                RoundedRectangle(cornerRadius: 6)
-                                    .fill(editorInspectorTab == tab ? Color.accentColor.opacity(0.16) : Color.clear)
-                            )
+    @ViewBuilder
+    private var playerAudioControls: some View {
+        if selectedTimelineClip != nil {
+            HStack(spacing: 7) {
+                Button {
+                    updateSelectedTimelineAdjustments { adjustments in
+                        adjustments.isMuted.toggle()
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(editorInspectorTab == tab ? Color.accentColor : Color.secondary)
-                    .quickTooltip(tab.title)
-                    .accessibilityLabel(tab.title)
+                } label: {
+                    Image(systemName: selectedTimelineClip?.adjustments.isMuted == true ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                        .font(.system(size: 13, weight: .semibold))
+                        .frame(width: 22, height: 22)
                 }
+                .buttonStyle(.plain)
+                .foregroundStyle(selectedTimelineClip?.adjustments.isMuted == true ? EditorTheme.accent : EditorTheme.primaryText)
+                .quickTooltip(selectedTimelineClip?.adjustments.isMuted == true ? "Unmute Clip" : "Mute Clip")
+                .accessibilityLabel(selectedTimelineClip?.adjustments.isMuted == true ? "Unmute Clip" : "Mute Clip")
+
+                Slider(
+                    value: timelineAdjustmentBinding(\.volume, default: 1),
+                    in: 0...2
+                )
+                .controlSize(.small)
+                .frame(width: 110)
+                .quickTooltip("Clip Volume")
+                .accessibilityLabel("Clip Volume")
+
+                Text(String(format: "%.2f", selectedTimelineClip?.adjustments.volume ?? 1))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(EditorTheme.secondaryText)
+                    .frame(width: 34, alignment: .trailing)
             }
-            .frame(height: topToolbarHeight)
             .padding(.horizontal, 8)
-            .background(.bar)
-            .overlay(alignment: .bottom) {
-                Divider()
-            }
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    switch editorInspectorTab {
-                    case .video:
-                        videoInspectorControls
-                    case .image:
-                        imageInspectorControls
-                    case .audio:
-                        audioInspectorControls
-                    case .adjust:
-                        adjustInspectorControls
-                    }
-                }
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .disabled(selectedTimelineClipID == nil)
-            .overlay {
-                if selectedTimelineClipID == nil {
-                    Text("Select a timeline clip.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding()
-                }
-            }
-        }
-        .background(Color(nsColor: .controlBackgroundColor))
-    }
-
-    @ViewBuilder
-    private var videoInspectorControls: some View {
-        InspectorSection(title: "Reframe") {
-            Picker("View", selection: timelineAdjustmentBinding(\.viewMode, default: .wide)) {
-                ForEach(EditorViewMode.allCases) { mode in
-                    Text(mode.title).tag(mode)
-                }
-            }
-            .pickerStyle(.segmented)
-
-            InspectorSliderRow(
-                title: "FOV",
-                value: timelineAdjustmentBinding(\.fieldOfView, default: 90),
-                range: 30...140,
-                format: "%.0f"
-            )
-            InspectorSliderRow(
-                title: "Yaw",
-                value: timelineAdjustmentBinding(\.yaw, default: 0),
-                range: -180...180,
-                format: "%.0f"
-            )
-            InspectorSliderRow(
-                title: "Pitch",
-                value: timelineAdjustmentBinding(\.pitch, default: 0),
-                range: -90...90,
-                format: "%.0f"
-            )
-            InspectorSliderRow(
-                title: "Roll",
-                value: timelineAdjustmentBinding(\.roll, default: 0),
-                range: -180...180,
-                format: "%.0f"
-            )
-        }
-
-        InspectorSection(title: "Keyframes") {
-            Toggle("Keyframes", isOn: timelineAdjustmentBinding(\.keyframesEnabled, default: false))
-            Toggle("Deep Track", isOn: timelineAdjustmentBinding(\.deepTrackEnabled, default: false))
-            Picker("Transition", selection: timelineAdjustmentBinding(\.transitionStyle, default: .linear)) {
-                ForEach(EditorKeyframeTransition.allCases) { transition in
-                    Text(transition.title).tag(transition)
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var imageInspectorControls: some View {
-        InspectorSection(title: "Framing") {
-            Toggle("Horizon Lock", isOn: timelineAdjustmentBinding(\.horizonLockEnabled, default: false))
-            Toggle("Stabilization", isOn: timelineAdjustmentBinding(\.stabilizationEnabled, default: false))
-            InspectorSliderRow(
-                title: "Horizon",
-                value: timelineAdjustmentBinding(\.horizonLevel, default: 0),
-                range: -45...45,
-                format: "%.0f"
-            )
-        }
-
-        InspectorSection(title: "Scale") {
-            InspectorSliderRow(
-                title: "Zoom",
-                value: timelineAdjustmentBinding(\.zoom, default: 1),
-                range: 0.5...3,
-                format: "%.2f"
-            )
-            InspectorSliderRow(
-                title: "X",
-                value: timelineAdjustmentBinding(\.offsetX, default: 0),
-                range: -100...100,
-                format: "%.0f"
-            )
-            InspectorSliderRow(
-                title: "Y",
-                value: timelineAdjustmentBinding(\.offsetY, default: 0),
-                range: -100...100,
-                format: "%.0f"
-            )
-        }
-    }
-
-    @ViewBuilder
-    private var audioInspectorControls: some View {
-        InspectorSection(title: "Audio") {
-            Toggle("Mute", isOn: timelineAdjustmentBinding(\.isMuted, default: false))
-            InspectorSliderRow(
-                title: "Volume",
-                value: timelineAdjustmentBinding(\.volume, default: 1),
-                range: 0...2,
-                format: "%.2f"
-            )
-            Toggle("Noise Reduction", isOn: timelineAdjustmentBinding(\.noiseReductionEnabled, default: false))
-        }
-    }
-
-    @ViewBuilder
-    private var adjustInspectorControls: some View {
-        InspectorSection(title: "Color") {
-            InspectorSliderRow(
-                title: "Exposure",
-                value: timelineAdjustmentBinding(\.exposure, default: 0),
-                range: -2...2,
-                format: "%.1f"
-            )
-            InspectorSliderRow(
-                title: "Contrast",
-                value: timelineAdjustmentBinding(\.contrast, default: 1),
-                range: 0...2,
-                format: "%.2f"
-            )
-            InspectorSliderRow(
-                title: "Saturation",
-                value: timelineAdjustmentBinding(\.saturation, default: 1),
-                range: 0...2,
-                format: "%.2f"
-            )
-            InspectorSliderRow(
-                title: "Sharpness",
-                value: timelineAdjustmentBinding(\.sharpness, default: 0),
-                range: 0...1,
-                format: "%.2f"
-            )
+            .padding(.vertical, 4)
+            .background(EditorTheme.panelBackground, in: RoundedRectangle(cornerRadius: 7))
         }
     }
 
     private var timelinePane: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
                 Button {
                     exportTimeline()
                 } label: {
                     if isExportingTimeline {
                         ProgressView()
                             .controlSize(.small)
-                            .frame(width: 24, height: 24)
+                            .frame(width: 22, height: 22)
                     } else {
                         Image(systemName: "square.and.arrow.up")
                             .font(.system(size: 13, weight: .medium))
-                            .frame(width: 24, height: 24)
+                            .frame(width: 22, height: 22)
                     }
                 }
                 .buttonStyle(.plain)
+                .foregroundStyle(EditorTheme.primaryText)
                 .disabled(timelineClips.isEmpty || isExportingTimeline)
                 .quickTooltip("Export Timeline")
                 .accessibilityLabel("Export Timeline")
 
-                Divider()
-                    .frame(height: 18)
+                Rectangle()
+                    .fill(EditorTheme.hairline)
+                    .frame(width: 1, height: 16)
 
                 Button {
                     resetSelectedTimelineTrim()
                 } label: {
                     Image(systemName: "arrow.uturn.backward")
                         .font(.system(size: 13, weight: .medium))
-                        .frame(width: 24, height: 24)
+                        .frame(width: 22, height: 22)
                 }
                 .buttonStyle(.plain)
+                .foregroundStyle(EditorTheme.primaryText)
                 .disabled(!selectedTimelineClipHasTrim)
                 .quickTooltip("Reset Timeline Trim")
                 .accessibilityLabel("Reset Timeline Trim")
@@ -1144,9 +1062,10 @@ struct ContentView: View {
                 } label: {
                     Image(systemName: "scissors")
                         .font(.system(size: 13, weight: .medium))
-                        .frame(width: 24, height: 24)
+                        .frame(width: 22, height: 22)
                 }
                 .buttonStyle(.plain)
+                .foregroundStyle(EditorTheme.primaryText)
                 .disabled(!canSplitSelectedTimelineClip)
                 .quickTooltip("Split Clip")
                 .accessibilityLabel("Split Clip")
@@ -1156,30 +1075,19 @@ struct ContentView: View {
                 } label: {
                     Image(systemName: "trash")
                         .font(.system(size: 13, weight: .medium))
-                        .frame(width: 24, height: 24)
+                        .frame(width: 22, height: 22)
                 }
                 .buttonStyle(.plain)
+                .foregroundStyle(EditorTheme.primaryText)
                 .disabled(selectedTimelineClipID == nil)
                 .quickTooltip("Delete Timeline Clip")
                 .accessibilityLabel("Delete Timeline Clip")
 
                 Spacer(minLength: 0)
 
-                Button {
-                    isTimelineSnappingEnabled.toggle()
-                } label: {
-                    Image(systemName: isTimelineSnappingEnabled ? "link" : "link.slash")
-                        .font(.system(size: 13, weight: .medium))
-                        .frame(width: 24, height: 24)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(isTimelineSnappingEnabled ? Color.accentColor : Color.primary)
-                .quickTooltip("Snap")
-                .accessibilityLabel("Snap")
-
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(EditorTheme.secondaryText)
 
                 Slider(value: $timelineZoom, in: 0.5...3.0)
                     .controlSize(.small)
@@ -1187,24 +1095,24 @@ struct ContentView: View {
                     .quickTooltip("Timeline Zoom")
                     .accessibilityLabel("Timeline Zoom")
             }
-            .frame(height: 36)
-            .padding(.horizontal, 10)
-            .background(.bar)
+            .frame(height: 28)
+            .padding(.horizontal, 8)
+            .background(EditorTheme.toolbarBackground)
             .overlay(alignment: .bottom) {
-                Divider()
+                Rectangle()
+                    .fill(EditorTheme.hairline)
+                    .frame(height: 1)
             }
 
             timelineRuler
-                .frame(height: 24)
+                .frame(height: 18)
 
             VStack(spacing: 0) {
                 timelineTrackRow(title: "Video", systemImage: "film", clips: timelineClips, acceptsDrops: true)
-                Divider()
-                timelineTrackRow(title: "Audio", systemImage: "speaker.wave.2", clips: [], acceptsDrops: false)
             }
-            .frame(maxHeight: .infinity)
+            .frame(height: 62)
         }
-        .background(Color(nsColor: .textBackgroundColor))
+        .background(EditorTheme.timelineBackground)
         .onDrop(
             of: [UTType.plainText.identifier],
             isTargeted: $isTimelineDropTargeted,
@@ -1217,28 +1125,31 @@ struct ContentView: View {
             let interval = timelineMarkerInterval
             let contentDuration = max(totalTimelineDuration, interval * 5)
             let markerCount = max(1, Int(ceil(contentDuration / interval)))
-            let contentWidth = max(geometry.size.width, 84 + CGFloat(contentDuration) * timelinePixelsPerSecond)
+            let labelGutter: CGFloat = 64
+            let contentWidth = max(geometry.size.width, labelGutter + CGFloat(contentDuration) * timelinePixelsPerSecond)
 
             ZStack(alignment: .topLeading) {
                 ForEach(0...markerCount, id: \.self) { marker in
                     let seconds = TimeInterval(marker) * interval
                     VStack(alignment: .leading, spacing: 2) {
                         Rectangle()
-                            .fill(Color.secondary.opacity(0.45))
-                            .frame(width: 1, height: 7)
+                            .fill(EditorTheme.secondaryText.opacity(0.55))
+                            .frame(width: 1, height: 5)
 
                         Text(MediaTrim.format(seconds))
-                            .font(.system(size: 9, weight: .medium, design: .monospaced))
-                            .foregroundStyle(.secondary)
+                            .font(.system(size: 8, weight: .medium, design: .monospaced))
+                            .foregroundStyle(EditorTheme.mutedText)
                     }
-                    .offset(x: 84 + CGFloat(seconds) * timelinePixelsPerSecond)
+                    .offset(x: labelGutter + CGFloat(seconds) * timelinePixelsPerSecond)
                 }
             }
             .frame(width: contentWidth, height: geometry.size.height, alignment: .topLeading)
         }
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background(EditorTheme.timelineBackground)
         .overlay(alignment: .bottom) {
-            Divider()
+            Rectangle()
+                .fill(EditorTheme.hairline)
+                .frame(height: 1)
         }
     }
 
@@ -1249,21 +1160,23 @@ struct ContentView: View {
         acceptsDrops: Bool
     ) -> some View {
         HStack(spacing: 0) {
-            HStack(spacing: 7) {
+            HStack(spacing: 5) {
                 Image(systemName: systemImage)
                     .font(.system(size: 13, weight: .semibold))
-                    .frame(width: 18)
+                    .frame(width: 16)
                 Text(title)
                     .font(.caption.weight(.semibold))
                     .lineLimit(1)
             }
-            .foregroundStyle(.secondary)
-            .frame(width: 84, alignment: .leading)
+            .foregroundStyle(EditorTheme.secondaryText)
+            .frame(width: 54, alignment: .leading)
             .frame(maxHeight: .infinity)
-            .padding(.horizontal, 10)
-            .background(Color(nsColor: .controlBackgroundColor))
+            .padding(.horizontal, 5)
+            .background(EditorTheme.trackAlternateBackground)
             .overlay(alignment: .trailing) {
-                Divider()
+                Rectangle()
+                    .fill(EditorTheme.hairline)
+                    .frame(width: 1)
             }
 
             ScrollView(.horizontal) {
@@ -1285,11 +1198,27 @@ struct ContentView: View {
                                 updateTimelineClipTrim(clip, trim: nextTrim)
                             }
                         )
-                        .frame(width: timelineClipWidth(for: clip))
+                        .frame(width: timelineClipWidth(for: clip), height: 42)
                         .contentShape(Rectangle())
+                        .opacity(draggingTimelineClipID == clip.id ? 0.72 : 1)
                         .onTapGesture {
                             selectTimelineClip(clip)
                         }
+                        .onDrag {
+                            draggingTimelineClipID = clip.id
+                            selectTimelineClip(clip)
+                            return NSItemProvider(object: timelineDragPayload(for: clip) as NSString)
+                        }
+                        .onDrop(
+                            of: [UTType.plainText.identifier],
+                            delegate: TimelineClipReorderDropDelegate(
+                                targetClipID: clip.id,
+                                draggingClipID: $draggingTimelineClipID,
+                                moveClip: { draggedID, targetID in
+                                    moveTimelineClip(draggedID, around: targetID)
+                                }
+                            )
+                        )
                         .contextMenu {
                             Button("Remove from Timeline") {
                                 removeTimelineClip(clip)
@@ -1299,24 +1228,25 @@ struct ContentView: View {
 
                     Spacer(minLength: 0)
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
                 .frame(maxHeight: .infinity, alignment: .leading)
             }
             .background {
                 if acceptsDrops && isTimelineDropTargeted {
                     RoundedRectangle(cornerRadius: 6)
-                        .fill(Color.accentColor.opacity(0.1))
+                        .fill(EditorTheme.accent.opacity(0.10))
                         .padding(4)
                 }
             }
             .overlay {
                 if acceptsDrops && isTimelineDropTargeted {
                     RoundedRectangle(cornerRadius: 6)
-                        .stroke(Color.accentColor.opacity(0.65), style: StrokeStyle(lineWidth: 1.5, dash: [6, 4]))
+                        .stroke(EditorTheme.accent.opacity(0.65), style: StrokeStyle(lineWidth: 1.5, dash: [6, 4]))
                         .padding(4)
                 }
             }
+            .background(EditorTheme.trackBackground)
         }
     }
 
@@ -1349,7 +1279,7 @@ struct ContentView: View {
             }
             .buttonStyle(.plain)
             .disabled(selectedItem == nil)
-            .foregroundStyle(isCropToolActive ? Color.accentColor : Color.primary)
+            .foregroundStyle(isCropToolActive ? EditorTheme.accent : EditorTheme.primaryText)
             .quickTooltip("Crop Tool")
             .accessibilityLabel("Crop Tool")
 
@@ -1394,8 +1324,9 @@ struct ContentView: View {
             .quickTooltip("Reset Crop")
             .accessibilityLabel("Reset Crop")
 
-            Divider()
-                .frame(height: 18)
+            Rectangle()
+                .fill(EditorTheme.hairline)
+                .frame(width: 1, height: 18)
                 .padding(.horizontal, 3)
 
             Button {
@@ -1411,7 +1342,7 @@ struct ContentView: View {
             }
             .buttonStyle(.plain)
             .disabled(!selectedCanTrim)
-            .foregroundStyle(isTrimToolActive ? Color.accentColor : Color.primary)
+            .foregroundStyle(isTrimToolActive ? EditorTheme.accent : EditorTheme.primaryText)
             .quickTooltip("Trim Tool")
             .accessibilityLabel("Trim Tool")
 
@@ -1448,8 +1379,9 @@ struct ContentView: View {
             .quickTooltip("Undo Edits")
             .accessibilityLabel("Undo Edits")
 
-            Divider()
-                .frame(height: 18)
+            Rectangle()
+                .fill(EditorTheme.hairline)
+                .frame(width: 1, height: 18)
                 .padding(.horizontal, 3)
 
             Button {
@@ -1483,7 +1415,7 @@ struct ContentView: View {
             if !selectedCrop.isFullFrame || !selectedTrim.isFullLength(for: selectedStatus.duration) {
                 Text(editSummaryLabel)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(EditorTheme.secondaryText)
                     .lineLimit(1)
                     .padding(.leading, 4)
                     .help("Current Edit Summary")
@@ -1493,15 +1425,18 @@ struct ContentView: View {
         }
         .frame(height: topToolbarHeight)
         .padding(.horizontal, 10)
-        .background(.bar)
+        .foregroundStyle(EditorTheme.primaryText)
+        .background(EditorTheme.toolbarBackground)
         .overlay(alignment: .bottom) {
-            Divider()
+            Rectangle()
+                .fill(EditorTheme.hairline)
+                .frame(height: 1)
         }
     }
 
     private var previewPanel: some View {
         ZStack {
-            Color(nsColor: .underPageBackgroundColor)
+            EditorTheme.canvasBackground
 
             if let item = selectedItem {
                 PreviewPane(
@@ -1518,7 +1453,7 @@ struct ContentView: View {
             } else {
                 Text(library.stateMessage)
                     .font(.title3)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(EditorTheme.secondaryText)
                     .multilineTextAlignment(.center)
                     .padding()
             }
@@ -1537,7 +1472,7 @@ struct ContentView: View {
     private var dropOverlay: some View {
         if isDropTargeted {
             RoundedRectangle(cornerRadius: 10)
-                .stroke(Color.accentColor, lineWidth: 3)
+                .stroke(EditorTheme.accent, lineWidth: 3)
                 .padding(10)
                 .allowsHitTesting(false)
         }
@@ -2086,7 +2021,7 @@ struct ContentView: View {
     }
 
     private func timelineClipWidth(for clip: EditorTimelineClip) -> CGFloat {
-        min(max(CGFloat(timelineDuration(for: clip)) * timelinePixelsPerSecond, 80), 700)
+        min(max(CGFloat(timelineDuration(for: clip)) * timelinePixelsPerSecond, 18), 900)
     }
 
     private func timelineStartTime(for targetClip: EditorTimelineClip) -> TimeInterval {
@@ -2144,7 +2079,7 @@ struct ContentView: View {
         }
 
         let trim = timelineTrim(for: selectedTimelineClip, duration: duration)
-        return min(max(snappedTimelineTime(editorPlayerTime), trim.start), trim.end)
+        return min(max(editorPlayerTime, trim.start), trim.end)
     }
 
     private var canSplitSelectedTimelineClip: Bool {
@@ -2160,14 +2095,6 @@ struct ContentView: View {
             && trim.end - splitTime >= MediaTrim.minimumDuration
     }
 
-    private func snappedTimelineTime(_ time: TimeInterval) -> TimeInterval {
-        guard isTimelineSnappingEnabled else {
-            return time
-        }
-
-        return (time * 2).rounded() / 2
-    }
-
     private func updateTimelineClipTrim(_ clip: EditorTimelineClip, trim: MediaTrim) {
         guard let index = timelineClips.firstIndex(where: { $0.id == clip.id }),
               let duration = editorClip(for: clip)?.status?.duration
@@ -2175,16 +2102,13 @@ struct ContentView: View {
             return
         }
 
-        let snapped = MediaTrim(
-            start: snappedTimelineTime(trim.start),
-            end: snappedTimelineTime(trim.end)
-        ).clamped(to: duration)
+        let nextTrim = trim.clamped(to: duration)
 
-        timelineClips[index].trim = snapped.isFullLength(for: duration) ? nil : snapped
+        timelineClips[index].trim = nextTrim.isFullLength(for: duration) ? nil : nextTrim
 
         if selectedTimelineClipID == clip.id {
-            editorPlayerTime = min(max(editorPlayerTime, snapped.start), snapped.end)
-            let timelineTime = timelineStartTime(for: timelineClips[index]) + max(0, editorPlayerTime - snapped.start)
+            editorPlayerTime = min(max(editorPlayerTime, nextTrim.start), nextTrim.end)
+            let timelineTime = timelineStartTime(for: timelineClips[index]) + max(0, editorPlayerTime - nextTrim.start)
             timelinePlaybackTime = timelineTime
             timelineSeekRequest = TimelinePlaybackSeekRequest(time: timelineTime)
         }
@@ -2242,7 +2166,11 @@ struct ContentView: View {
     }
 
     private func dragPayload(for clip: EditorClip) -> String {
-        clip.id.absoluteString
+        EditorDragPayload.editorClipPayload(for: clip.id)
+    }
+
+    private func timelineDragPayload(for clip: EditorTimelineClip) -> String {
+        EditorDragPayload.timelineClipPayload(for: clip.id)
     }
 
     private func handleTimelineDrop(_ providers: [NSItemProvider]) -> Bool {
@@ -2262,18 +2190,61 @@ struct ContentView: View {
                 payload = nil
             }
 
-            guard let payload,
-                  let sourceClipID = URL(string: payload)
-            else {
+            guard let payload else {
                 return
             }
 
-            Task { @MainActor in
-                addTimelineClip(sourceClipID: sourceClipID)
+            if EditorDragPayload.timelineClipID(from: payload) != nil {
+                Task { @MainActor in
+                    draggingTimelineClipID = nil
+                }
+                return
+            }
+
+            if let sourceClipID = EditorDragPayload.editorClipID(from: payload) {
+                Task { @MainActor in
+                    addTimelineClip(sourceClipID: sourceClipID)
+                }
             }
         }
 
         return true
+    }
+
+    private func moveTimelineClip(
+        _ draggedID: EditorTimelineClip.ID,
+        around targetID: EditorTimelineClip.ID
+    ) {
+        guard draggedID != targetID,
+              let fromIndex = timelineClips.firstIndex(where: { $0.id == draggedID }),
+              let toIndex = timelineClips.firstIndex(where: { $0.id == targetID })
+        else {
+            return
+        }
+
+        withAnimation(.snappy(duration: 0.16)) {
+            timelineClips.move(
+                fromOffsets: IndexSet(integer: fromIndex),
+                toOffset: toIndex > fromIndex ? toIndex + 1 : toIndex
+            )
+        }
+
+        selectedTimelineClipID = draggedID
+        syncTimelinePlaybackToSelectedClip()
+    }
+
+    private func syncTimelinePlaybackToSelectedClip() {
+        guard let selectedTimelineClip,
+              let duration = editorClip(for: selectedTimelineClip)?.status?.duration
+        else {
+            return
+        }
+
+        let trim = timelineTrim(for: selectedTimelineClip, duration: duration)
+        editorPlayerTime = min(max(editorPlayerTime, trim.start), trim.end)
+        let timelineTime = timelineStartTime(for: selectedTimelineClip) + max(0, editorPlayerTime - trim.start)
+        timelinePlaybackTime = timelineTime
+        timelineSeekRequest = TimelinePlaybackSeekRequest(time: timelineTime)
     }
 
     private func removeTimelineClip(_ clip: EditorTimelineClip) {
@@ -2614,7 +2585,7 @@ struct ContentView: View {
     private func panelFocusOverlay(for panel: SidePanel) -> some View {
         if activePanel == panel {
             RoundedRectangle(cornerRadius: 5)
-                .stroke(Color.accentColor.opacity(0.55), lineWidth: 1)
+                .stroke(EditorTheme.accent.opacity(0.55), lineWidth: 1)
                 .padding(3)
                 .allowsHitTesting(false)
         }
@@ -2635,6 +2606,14 @@ struct ContentView: View {
             if let window = NSApplication.shared.windows.first {
                 window.title = "MediaBrowser"
                 window.titleVisibility = .hidden
+                window.appearance = NSAppearance(named: .darkAqua)
+                window.backgroundColor = NSColor(
+                    red: 0.015,
+                    green: 0.017,
+                    blue: 0.018,
+                    alpha: 1
+                )
+                window.titlebarAppearsTransparent = true
                 if let titlebar = window.standardWindowButton(.closeButton)?.superview {
                     let titleLabelTag = 901_202
                     let label: NSTextField
@@ -2644,10 +2623,10 @@ struct ContentView: View {
                         label = NSTextField(labelWithString: "MediaBrowser")
                         label.tag = titleLabelTag
                         label.font = .systemFont(ofSize: 13, weight: .semibold)
-                        label.textColor = .labelColor
                         label.alignment = .center
                         titlebar.addSubview(label)
                     }
+                    label.textColor = .white.withAlphaComponent(0.82)
                     label.translatesAutoresizingMaskIntoConstraints = false
                     NSLayoutConstraint.activate([
                         label.centerXAnchor.constraint(equalTo: titlebar.centerXAnchor),
@@ -2673,6 +2652,17 @@ struct ContentView: View {
 private enum SidePanel {
     case thumbnail
     case pinned
+}
+
+private extension MainPanelTab {
+    var editorTabTitle: String {
+        switch self {
+        case .preview:
+            return "Media"
+        case .videoEditor:
+            return "Video Editor"
+        }
+    }
 }
 
 private struct EditorClip: Identifiable {
@@ -2711,28 +2701,6 @@ private struct EditorTimelineAdjustments: Hashable {
     var contrast = 1.0
     var saturation = 1.0
     var sharpness = 0.0
-}
-
-private enum EditorInspectorTab: CaseIterable, Identifiable {
-    case video
-    case image
-    case audio
-    case adjust
-
-    var id: Self { self }
-
-    var title: String {
-        switch self {
-        case .video:
-            return "Video"
-        case .image:
-            return "Image"
-        case .audio:
-            return "Audio"
-        case .adjust:
-            return "Adjust"
-        }
-    }
 }
 
 private enum EditorViewMode: String, CaseIterable, Identifiable {
@@ -2775,61 +2743,6 @@ private enum EditorKeyframeTransition: String, CaseIterable, Identifiable {
             return "Ease Out"
         case .easeInOut:
             return "Ease"
-        }
-    }
-}
-
-private enum EditorMediaCategory: CaseIterable, Identifiable {
-    case media
-    case music
-    case text
-    case transitions
-    case movement
-
-    var id: Self { self }
-
-    var title: String {
-        switch self {
-        case .media:
-            return "Media"
-        case .music:
-            return "Music"
-        case .text:
-            return "Text"
-        case .transitions:
-            return "Transitions"
-        case .movement:
-            return "Movement"
-        }
-    }
-
-    var systemImage: String {
-        switch self {
-        case .media:
-            return "photo.on.rectangle"
-        case .music:
-            return "music.note"
-        case .text:
-            return "textformat"
-        case .transitions:
-            return "bowtie"
-        case .movement:
-            return "figure.walk.motion"
-        }
-    }
-
-    var emptyMessage: String {
-        switch self {
-        case .media:
-            return "No clips added."
-        case .music:
-            return "No music assets added."
-        case .text:
-            return "No text assets added."
-        case .transitions:
-            return "No transitions added."
-        case .movement:
-            return "No movement presets added."
         }
     }
 }
@@ -2996,19 +2909,19 @@ private struct TrimRangeSlider: View {
                     .position(x: size.width / 2, y: size.height / 2)
 
                 Capsule()
-                    .fill(Color.accentColor.opacity(0.75))
+                    .fill(EditorTheme.accent.opacity(0.82))
                     .frame(width: max(endX - startX, 2), height: 4)
                     .position(x: (startX + endX) / 2, y: size.height / 2)
 
                 Circle()
-                    .fill(activeHandle == .start ? Color.accentColor : Color(nsColor: .controlBackgroundColor))
-                    .stroke(Color.accentColor, lineWidth: 1.5)
+                    .fill(activeHandle == .start ? EditorTheme.accent : EditorTheme.panelRaised)
+                    .stroke(EditorTheme.accent, lineWidth: 1.5)
                     .frame(width: handleSize, height: handleSize)
                     .position(x: startX, y: size.height / 2)
 
                 Circle()
-                    .fill(activeHandle == .end ? Color.accentColor : Color(nsColor: .controlBackgroundColor))
-                    .stroke(Color.accentColor, lineWidth: 1.5)
+                    .fill(activeHandle == .end ? EditorTheme.accent : EditorTheme.panelRaised)
+                    .stroke(EditorTheme.accent, lineWidth: 1.5)
                     .frame(width: handleSize, height: handleSize)
                     .position(x: endX, y: size.height / 2)
             }
@@ -3107,61 +3020,13 @@ private extension String {
     }
 }
 
-private struct InspectorSection<Content: View>: View {
-    let title: String
-    let content: () -> Content
-
-    init(title: String, @ViewBuilder content: @escaping () -> Content) {
-        self.title = title
-        self.content = content
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-
-            VStack(alignment: .leading, spacing: 8) {
-                content()
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-private struct InspectorSliderRow: View {
-    let title: String
-    @Binding var value: Double
-    let range: ClosedRange<Double>
-    let format: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
-                Text(title)
-                    .font(.caption)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                Text(String(format: format, value))
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .frame(width: 44, alignment: .trailing)
-            }
-
-            Slider(value: $value, in: range)
-                .controlSize(.small)
-        }
-    }
-}
-
 private struct EditorClipCard: View {
     let clip: EditorClip
     let thumbnail: NSImage?
     let isSelected: Bool
 
     var body: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 7) {
             ZStack(alignment: .bottomTrailing) {
                 Group {
                     if let thumbnail {
@@ -3174,24 +3039,26 @@ private struct EditorClipCard: View {
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 }
-                .frame(height: 64)
+                .frame(height: 76)
                 .frame(maxWidth: .infinity)
-                .clipShape(RoundedRectangle(cornerRadius: 5))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
                 .background {
-                    RoundedRectangle(cornerRadius: 5)
-                        .fill(Color(nsColor: .quaternaryLabelColor))
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(EditorTheme.thumbnailWell)
                 }
 
                 Text(durationBadge)
                     .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.white)
                     .padding(.horizontal, 4)
                     .padding(.vertical, 2)
-                    .background(.thinMaterial, in: Capsule())
+                    .background(Color.black.opacity(0.72), in: Capsule())
                     .padding(4)
             }
 
             Text(clip.item.fileName)
                 .font(.caption2)
+                .foregroundStyle(EditorTheme.secondaryText)
                 .lineLimit(2)
                 .truncationMode(.middle)
                 .multilineTextAlignment(.center)
@@ -3199,12 +3066,12 @@ private struct EditorClipCard: View {
         }
         .padding(6)
         .background(
-            RoundedRectangle(cornerRadius: 7)
-                .fill(isSelected ? Color.accentColor.opacity(0.14) : Color(nsColor: .windowBackgroundColor))
+            RoundedRectangle(cornerRadius: 8)
+                .fill(isSelected ? EditorTheme.panelRaised : Color.clear)
         )
         .overlay {
-            RoundedRectangle(cornerRadius: 7)
-                .stroke(isSelected ? Color.accentColor : Color.secondary.opacity(0.18), lineWidth: isSelected ? 2 : 1)
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(isSelected ? EditorTheme.accent : EditorTheme.hairline, lineWidth: isSelected ? 2 : 1)
         }
     }
 
@@ -3213,6 +3080,31 @@ private struct EditorClipCard: View {
             return MediaTrim.format(duration)
         }
         return clip.item.kind.label
+    }
+}
+
+private struct TimelineClipReorderDropDelegate: DropDelegate {
+    let targetClipID: EditorTimelineClip.ID
+    @Binding var draggingClipID: EditorTimelineClip.ID?
+    let moveClip: (EditorTimelineClip.ID, EditorTimelineClip.ID) -> Void
+
+    func validateDrop(info: DropInfo) -> Bool {
+        draggingClipID != nil
+    }
+
+    func dropEntered(info: DropInfo) {
+        guard let draggingClipID,
+              draggingClipID != targetClipID
+        else {
+            return
+        }
+
+        moveClip(draggingClipID, targetClipID)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        draggingClipID = nil
+        return true
     }
 }
 
@@ -3231,43 +3123,55 @@ private struct TimelineClipBlock: View {
 
     var body: some View {
         GeometryReader { geometry in
-            HStack(spacing: 7) {
-                Group {
-                    if let thumbnail {
-                        Image(nsImage: thumbnail)
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                    } else {
-                        Color.secondary.opacity(0.22)
+            let width = geometry.size.width
+            let showsThumbnail = width >= 26
+            let showsDetails = width >= 74
+            let horizontalPadding: CGFloat = width < 42 ? 3 : 7
+            let thumbnailWidth = min(44, max(18, width * 0.45))
+
+            HStack(spacing: showsDetails ? 7 : 0) {
+                if showsThumbnail {
+                    Group {
+                        if let thumbnail {
+                            Image(nsImage: thumbnail)
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                        } else {
+                            EditorTheme.thumbnailWell
+                        }
                     }
+                    .frame(width: thumbnailWidth)
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
                 }
-                .frame(width: 44)
-                .clipShape(RoundedRectangle(cornerRadius: 4))
 
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(sourceClip?.item.fileName ?? "Missing Clip")
-                        .font(.caption2.weight(.semibold))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                if showsDetails {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(sourceClip?.item.fileName ?? "Missing Clip")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
 
-                    Text(detailText)
-                        .font(.system(size: 9, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        Text(detailText)
+                            .font(.system(size: 9, weight: .medium, design: .monospaced))
+                            .foregroundStyle(Color.white.opacity(0.78))
+                            .lineLimit(1)
+                    }
                 }
 
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 7)
+            .padding(.horizontal, horizontalPadding)
             .padding(.vertical, 6)
             .frame(width: geometry.size.width, height: geometry.size.height)
+            .clipped()
             .background(
                 RoundedRectangle(cornerRadius: 6)
-                    .fill(isSelected ? Color.accentColor.opacity(0.2) : Color.accentColor.opacity(0.1))
+                    .fill(isSelected ? EditorTheme.clipBlueSelected : EditorTheme.clipBlue)
             )
             .overlay {
                 RoundedRectangle(cornerRadius: 6)
-                    .stroke(isSelected ? Color.accentColor : Color.accentColor.opacity(0.28), lineWidth: isSelected ? 2 : 1)
+                    .stroke(isSelected ? EditorTheme.accent : Color.white.opacity(0.16), lineWidth: isSelected ? 2 : 1)
             }
             .overlay(alignment: .leading) {
                 if let playheadProgress {
@@ -3371,17 +3275,18 @@ struct ThumbnailRow: View {
                     }
                 }
                 .frame(width: 112, height: 78)
-                .clipShape(RoundedRectangle(cornerRadius: 5))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
                 .background {
-                    RoundedRectangle(cornerRadius: 5)
-                        .fill(Color(nsColor: .quaternaryLabelColor))
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(EditorTheme.thumbnailWell)
                 }
 
                 Text(item.kind.label)
                     .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.white)
                     .padding(.horizontal, 4)
                     .padding(.vertical, 2)
-                    .background(.thinMaterial, in: Capsule())
+                    .background(Color.black.opacity(0.72), in: Capsule())
                     .padding(3)
             }
             .overlay(alignment: .topLeading) {
@@ -3390,13 +3295,14 @@ struct ThumbnailRow: View {
                         .font(.system(size: 10, weight: .bold))
                         .foregroundStyle(.white)
                         .frame(width: 18, height: 18)
-                        .background(Color.accentColor, in: Circle())
+                        .background(EditorTheme.accent, in: Circle())
                         .padding(3)
                 }
             }
 
             Text(item.fileName)
                 .font(.caption)
+                .foregroundStyle(EditorTheme.secondaryText)
                 .lineLimit(2)
                 .truncationMode(.middle)
                 .multilineTextAlignment(.center)
@@ -3415,16 +3321,17 @@ struct FolderRow: View {
         HStack(spacing: 7) {
             Image(systemName: entry.isExpanded ? "chevron.down" : "chevron.right")
                 .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(EditorTheme.mutedText)
                 .frame(width: 12)
 
             Image(systemName: entry.isExpanded ? "folder.fill" : "folder")
                 .font(.system(size: 20, weight: .medium))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(EditorTheme.secondaryText)
                 .frame(width: 24)
 
             Text(entry.folder.name)
                 .font(.caption.weight(.semibold))
+                .foregroundStyle(EditorTheme.primaryText)
                 .lineLimit(1)
                 .truncationMode(.middle)
 
@@ -3459,7 +3366,7 @@ struct PreviewPane: View {
             if failedToLoad {
                 Text("This file could not be loaded.")
                     .font(.title3)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(EditorTheme.secondaryText)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let naturalSize, naturalSize.width > 0, naturalSize.height > 0 {
                 fittedMedia(in: geometry.size, naturalSize: naturalSize)
@@ -3574,7 +3481,7 @@ private struct CropOverlay: View {
                     .allowsHitTesting(isEditable)
 
                 Rectangle()
-                    .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 2, dash: [7, 5]))
+                    .strokeBorder(EditorTheme.accent, style: StrokeStyle(lineWidth: 2, dash: [7, 5]))
                     .frame(width: cropRect.width, height: cropRect.height)
                     .position(x: cropRect.midX, y: cropRect.midY)
                     .allowsHitTesting(false)
@@ -3582,7 +3489,7 @@ private struct CropOverlay: View {
                 if isEditable {
                     ForEach(CropHandle.allCases) { handle in
                         Circle()
-                            .fill(Color.accentColor)
+                            .fill(EditorTheme.accent)
                             .stroke(Color.white, lineWidth: 1.5)
                             .frame(width: 12, height: 12)
                             .position(handle.position(in: cropRect))
@@ -3601,7 +3508,7 @@ private struct CropOverlay: View {
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(.white)
-                        .background(Color.accentColor, in: Capsule())
+                        .background(EditorTheme.accent, in: Capsule())
                         .position(
                             x: min(max(cropRect.maxX - 38, 42), geometry.size.width - 42),
                             y: min(max(cropRect.minY + 22, 22), geometry.size.height - 22)
