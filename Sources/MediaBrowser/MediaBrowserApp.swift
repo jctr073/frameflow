@@ -2,6 +2,8 @@ import SwiftUI
 
 @main
 struct MediaBrowserApp: App {
+    @StateObject private var mainPanelState = MainPanelState()
+
     private let initialFolderURL: URL?
 
     init() {
@@ -19,11 +21,24 @@ struct MediaBrowserApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView(initialFolderURL: initialFolderURL)
+            ContentView(initialFolderURL: initialFolderURL, mainPanelState: mainPanelState)
                 .frame(minWidth: 760, minHeight: 500)
         }
         .commands {
             CommandGroup(replacing: .newItem) { }
+            CommandGroup(after: .toolbar) {
+                Divider()
+
+                Toggle("Preview Panel", isOn: Binding(
+                    get: { mainPanelState.isVisible(.preview) },
+                    set: { mainPanelState.setVisible(.preview, $0) }
+                ))
+
+                Toggle("Video Editor Panel", isOn: Binding(
+                    get: { mainPanelState.isVisible(.videoEditor) },
+                    set: { mainPanelState.setVisible(.videoEditor, $0, activate: $0) }
+                ))
+            }
         }
     }
 }
