@@ -34,9 +34,9 @@ struct MediaBrowserApp: App {
                     set: { mainPanelState.setVisible(.preview, $0) }
                 ))
 
-                Toggle("Video Editor Panel", isOn: Binding(
-                    get: { mainPanelState.isVisible(.videoEditor) },
-                    set: { mainPanelState.setVisible(.videoEditor, $0, activate: $0) }
+                Toggle("Video Composer Panel", isOn: Binding(
+                    get: { mainPanelState.isVisible(.videoComposer) },
+                    set: { mainPanelState.setVisible(.videoComposer, $0, activate: $0) }
                 ))
             }
         }

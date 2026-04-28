@@ -5,6 +5,11 @@ This document maps the main UI panels and controls to their names in the SwiftUI
 ```text
 ContentView
 └─ VStack
+   ├─ mainPanelTabBar
+   │  ├─ Media tab
+   │  ├─ Video Composer tab
+   │  └─ Export Timeline button
+   │
    ├─ HSplitView
    │  ├─ thumbnailPanel
    │  │  ├─ folderHeader
@@ -19,9 +24,6 @@ ContentView
    │  │     └─ ThumbnailRow
    │  │
    │  ├─ mainPanel
-   │  │  ├─ mainPanelTabBar
-   │  │  │  ├─ Preview tab
-   │  │  │  └─ Video Editor tab
    │  │  ├─ previewMainPanel
    │  │  │  ├─ editingToolbar
    │  │  │  │  ├─ Snapshot Current Frame
@@ -49,7 +51,7 @@ ContentView
    │  │  │           ├─ CropDimShape
    │  │  │           ├─ crop drag/resize handles
    │  │  │           └─ Apply Crop button
-   │  │  └─ videoEditorPanel
+   │  │  └─ videoComposerPanel
    │  │     ├─ clipsPane
    │  │     │  ├─ Clips header
    │  │     │  ├─ Import Clips button
@@ -57,6 +59,11 @@ ContentView
    │  │     ├─ playerPane
    │  │     │  ├─ selected media-bin clip or active timeline clip header
    │  │     │  ├─ selected timeline clip audio mute / volume controls
+   │  │     │  ├─ playerEditingToolbar
+   │  │     │  │  ├─ Snapshot Current Frame
+   │  │     │  │  ├─ Crop Tool
+   │  │     │  │  ├─ Crop Presets
+   │  │     │  │  └─ Reset Crop
    │  │     │  ├─ PreviewPane for media-bin preview
    │  │     │  └─ TimelineSequenceVideoView for full timeline playback
    │  │     └─ timelinePane
@@ -105,7 +112,7 @@ ContentView overlays/background helpers
 ```text
 View menu
 ├─ Preview Panel checkbox
-└─ Video Editor Panel checkbox
+└─ Video Composer Panel checkbox
 ```
 
 ## Panel State
@@ -125,7 +132,7 @@ The active main panel tab and visible main panel tabs are tracked with `MainPane
 ```swift
 enum MainPanelTab {
     case preview
-    case videoEditor
+    case videoComposer
 }
 ```
 
@@ -147,6 +154,10 @@ Each `EditorTimelineClip` may also carry its own `MediaTrim`. Timeline trim hand
 that per-instance trim, the player previews the selected timeline trim, and Split Clip
 creates two timeline instances split at the current player time. `timelineZoom` controls
 timeline clip width and ruler scale without changing media timing.
+
+Each `EditorTimelineClip` may also carry its own `NormalizedCrop`. The
+`playerEditingToolbar` in `playerPane` edits the selected timeline clip's crop when a
+timeline clip is active, and timeline playback/export use that per-instance crop.
 
 The editor player has two playback paths. When a media-bin clip is selected,
 `playerPane` still uses `PreviewPane` for single-clip preview. When a timeline clip is
@@ -173,7 +184,7 @@ honors those audio settings.
 - `pinnedPanel`: `Sources/MediaBrowser/ContentView.swift`
 - `statusBar`: `Sources/MediaBrowser/ContentView.swift`
 - `mainPanel`, `mainPanelTabBar`, `editingToolbar`, `previewPanel`: `Sources/MediaBrowser/ContentView.swift`
-- `videoEditorPanel`, `clipsPane`, `playerPane`, `timelinePane`: `Sources/MediaBrowser/ContentView.swift`
+- `videoComposerPanel`, `clipsPane`, `playerPane`, `timelinePane`: `Sources/MediaBrowser/ContentView.swift`
 - `TimelineSequenceVideoView`: `Sources/MediaBrowser/NativeMediaViews.swift`
 - timeline export: `Sources/MediaBrowser/MediaEditing.swift`
 - `TrimControls`: `Sources/MediaBrowser/ContentView.swift`

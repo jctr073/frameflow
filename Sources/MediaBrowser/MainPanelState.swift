@@ -2,7 +2,7 @@ import SwiftUI
 
 enum MainPanelTab: Hashable, Identifiable {
     case preview
-    case videoEditor
+    case videoComposer
 
     var id: Self { self }
 
@@ -10,8 +10,8 @@ enum MainPanelTab: Hashable, Identifiable {
         switch self {
         case .preview:
             return "Preview"
-        case .videoEditor:
-            return "Video Editor"
+        case .videoComposer:
+            return "Video Composer"
         }
     }
 
@@ -19,7 +19,7 @@ enum MainPanelTab: Hashable, Identifiable {
         switch self {
         case .preview:
             return "play.rectangle"
-        case .videoEditor:
+        case .videoComposer:
             return "timeline.selection"
         }
     }
@@ -68,8 +68,8 @@ final class MainPanelState: ObservableObject {
         if visibleTabs.contains(.preview) {
             return .preview
         }
-        if visibleTabs.contains(.videoEditor) {
-            return .videoEditor
+        if visibleTabs.contains(.videoComposer) {
+            return .videoComposer
         }
         visibleTabs.insert(.preview)
         return .preview

@@ -147,6 +147,7 @@ struct PinnedMediaItem: Identifiable, Hashable, Sendable {
 struct TimelineExportClip: Sendable {
     let item: MediaItem
     let trim: MediaTrim?
+    let crop: NormalizedCrop?
     let volume: Float
 }
 
@@ -220,8 +221,11 @@ enum MediaExport {
                 .applying(preferredTransform)
                 .standardized
             let displaySize = CGSize(width: abs(transformedBounds.width), height: abs(transformedBounds.height))
+            let clipCrop = clip.crop ?? .full
+            let cropRect = clipCrop.pixelRect(in: displaySize)
+            let visibleSize = cropRect.width > 1 && cropRect.height > 1 ? cropRect.size : displaySize
             if renderSize == nil {
-                renderSize = CGSize(width: even(displaySize.width), height: even(displaySize.height))
+                renderSize = CGSize(width: even(visibleSize.width), height: even(visibleSize.height))
             }
 
             if let nominalFrameRate = try? await sourceVideoTrack.load(.nominalFrameRate), nominalFrameRate > frameRate {
@@ -230,27 +234,42 @@ enum MediaExport {
 
             let instruction = AVMutableVideoCompositionInstruction()
             instruction.timeRange = CMTimeRange(start: cursor, duration: sourceTimeRange.duration)
+            instruction.backgroundColor = CGColor(gray: 0, alpha: 1)
 
             let layerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: compositionVideoTrack)
             if let renderSize {
-                let scale = min(renderSize.width / max(displaySize.width, 1), renderSize.height / max(displaySize.height, 1))
-                let scaledSize = CGSize(width: displaySize.width * scale, height: displaySize.height * scale)
+                let scale = min(renderSize.width / max(visibleSize.width, 1), renderSize.height / max(visibleSize.height, 1))
+                let scaledSize = CGSize(width: visibleSize.width * scale, height: visibleSize.height * scale)
+                let cropFrame = CGRect(
+                    x: (renderSize.width - scaledSize.width) / 2,
+                    y: (renderSize.height - scaledSize.height) / 2,
+                    width: scaledSize.width,
+                    height: scaledSize.height
+                )
                 let normalize = CGAffineTransform(
                     translationX: -transformedBounds.minX,
                     y: -transformedBounds.minY
                 )
+                let crop = CGAffineTransform(
+                    translationX: -cropRect.minX,
+                    y: -cropRect.minY
+                )
                 let fit = CGAffineTransform(scaleX: scale, y: scale)
                 let center = CGAffineTransform(
-                    translationX: (renderSize.width - scaledSize.width) / 2,
-                    y: (renderSize.height - scaledSize.height) / 2
+                    translationX: cropFrame.minX,
+                    y: cropFrame.minY
                 )
                 layerInstruction.setTransform(
                     preferredTransform
                         .concatenating(normalize)
+                        .concatenating(crop)
                         .concatenating(fit)
                         .concatenating(center),
                     at: cursor
                 )
+                if !clipCrop.isFullFrame {
+                    layerInstruction.setCropRectangle(cropFrame, at: cursor)
+                }
             } else {
                 layerInstruction.setTransform(preferredTransform, at: cursor)
             }
