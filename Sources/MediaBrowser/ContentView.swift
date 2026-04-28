@@ -73,13 +73,16 @@ struct ContentView: View {
     @State private var timelineZoom = 1.0
     @State private var isExportingTimeline = false
     @State private var activePanel: SidePanel = .thumbnail
-    @State private var thumbnailSelectionID: URL?
+    @State private var thumbnailSelectionIDs: Set<URL> = []
+    @State private var thumbnailSelectionAnchorID: URL?
     @State private var isCopyingPinnedFiles = false
     @State private var isCropToolActive = false
+    @State private var isPlayerCropToolActive = false
     @State private var isTrimToolActive = false
     @State private var isCapturingSnapshot = false
     @State private var previewVideoTime: TimeInterval = 0
     @State private var cropRects: [URL: NormalizedCrop] = [:]
+    @State private var timelineCropRects: [EditorTimelineClip.ID: NormalizedCrop] = [:]
     @State private var trimRanges: [URL: MediaTrim] = [:]
     @State private var appliedCrops: [URL: NormalizedCrop] = [:]
     @State private var appliedTrims: [URL: MediaTrim] = [:]
@@ -96,7 +99,11 @@ struct ContentView: View {
     }
 
     var body: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 0) {
+            if visibleEditorTabs.count > 1 {
+                mainPanelTabBar
+            }
+
             HSplitView {
                 thumbnailPanel
                     .frame(minWidth: 132, idealWidth: 170, maxWidth: 260)
@@ -135,7 +142,10 @@ struct ContentView: View {
             if activePanel == .thumbnail,
                let selectedID = library.selectedID,
                visibleThumbnailEntries.contains(where: { $0.id == selectedID }) {
-                thumbnailSelectionID = selectedID
+                if !thumbnailSelectionIDs.contains(selectedID) {
+                    thumbnailSelectionIDs = [selectedID]
+                }
+                thumbnailSelectionAnchorID = selectedID
             }
             if selectedItem?.kind != .video && selectedItem?.kind != .gif {
                 isTrimToolActive = false
@@ -161,6 +171,7 @@ struct ContentView: View {
         VStack(spacing: 0) {
             folderHeader
             filterControl
+            thumbnailBatchControl
 
             if visibleThumbnailEntries.isEmpty {
                 Text(thumbnailEmptyMessage)
@@ -171,7 +182,7 @@ struct ContentView: View {
                     .padding()
             } else {
                 ScrollViewReader { proxy in
-                    List(selection: $thumbnailSelectionID) {
+                    List(selection: $thumbnailSelectionIDs) {
                         ForEach(visibleThumbnailEntries) { entry in
                             switch entry {
                             case .folder(let folderEntry):
@@ -181,9 +192,8 @@ struct ContentView: View {
                                 .accessibilityLabel(folderEntry.folder.name)
                                 .help(folderEntry.folder.url.path)
                                 .onTapGesture {
-                                    activePanel = .thumbnail
-                                    thumbnailSelectionID = entry.id
-                                        library.toggleFolder(folderEntry.folder)
+                                    handleThumbnailEntryTap(entry)
+                                    library.toggleFolder(folderEntry.folder)
                                     }
                             case .item(let itemEntry):
                                 ThumbnailRow(
@@ -196,17 +206,17 @@ struct ContentView: View {
                                 .accessibilityLabel(itemEntry.item.fileName)
                                 .help(itemEntry.item.url.path)
                                 .onTapGesture {
-                                    activePanel = .thumbnail
-                                    thumbnailSelectionID = entry.id
-                                    library.selectedID = itemEntry.item.id
+                                    handleThumbnailEntryTap(entry)
                                 }
                                 .contextMenu {
-                                    Button(editorClipMenuTitle(for: itemEntry.item)) {
-                                        addToEditorClips(itemEntry.item)
+                                    let contextItems = thumbnailContextItems(for: itemEntry.item)
+
+                                    Button(editorClipMenuTitle(for: contextItems)) {
+                                        addToEditorClips(contextItems)
                                     }
 
-                                    Button(pinMenuTitle(for: itemEntry.item)) {
-                                        pin(itemEntry.item)
+                                    Button(pinMenuTitle(for: contextItems)) {
+                                        pin(contextItems)
                                     }
                                 }
                             }
@@ -216,8 +226,8 @@ struct ContentView: View {
                     .scrollContentBackground(.hidden)
                     .background(EditorTheme.panelBackground)
                     .overlay(panelFocusOverlay(for: .thumbnail))
-                    .onChange(of: thumbnailSelectionID) {
-                        guard let thumbnailSelectionID else { return }
+                    .onChange(of: thumbnailSelectionIDs) {
+                        guard let thumbnailSelectionID = primaryThumbnailSelectionID else { return }
                         withAnimation(.snappy(duration: 0.16)) {
                             proxy.scrollTo(thumbnailSelectionID, anchor: .center)
                         }
@@ -226,6 +236,52 @@ struct ContentView: View {
             }
         }
         .background(EditorTheme.panelBackground)
+    }
+
+    @ViewBuilder
+    private var thumbnailBatchControl: some View {
+        let selectedItems = selectedThumbnailItems
+        if selectedItems.count > 1 {
+            HStack(spacing: 8) {
+                Text("\(selectedItems.count) selected")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(EditorTheme.secondaryText)
+                    .lineLimit(1)
+
+                Spacer(minLength: 0)
+
+                Button {
+                    addToEditorClips(selectedItems)
+                } label: {
+                    Image(systemName: "film.stack")
+                        .font(.system(size: 13, weight: .medium))
+                        .frame(width: 24, height: 24)
+                }
+                .buttonStyle(.plain)
+                .quickTooltip("Show in Clips")
+                .accessibilityLabel("Show in Clips")
+
+                Button {
+                    pin(selectedItems)
+                } label: {
+                    Image(systemName: "pin")
+                        .font(.system(size: 13, weight: .medium))
+                        .frame(width: 24, height: 24)
+                }
+                .buttonStyle(.plain)
+                .quickTooltip("Pin Files")
+                .accessibilityLabel("Pin Files")
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .foregroundStyle(EditorTheme.primaryText)
+            .background(EditorTheme.panelBackground)
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(EditorTheme.hairline)
+                    .frame(height: 1)
+            }
+        }
     }
 
     private var pinnedPanel: some View {
@@ -486,6 +542,23 @@ struct ContentView: View {
         visibleThumbnailEntries.compactMap(\.item)
     }
 
+    private var selectedThumbnailItems: [MediaItem] {
+        visibleThumbnailEntries.compactMap { entry in
+            guard thumbnailSelectionIDs.contains(entry.id) else { return nil }
+            return entry.item
+        }
+    }
+
+    private var primaryThumbnailSelectionID: URL? {
+        if let thumbnailSelectionAnchorID,
+           thumbnailSelectionIDs.contains(thumbnailSelectionAnchorID),
+           visibleThumbnailEntries.contains(where: { $0.id == thumbnailSelectionAnchorID }) {
+            return thumbnailSelectionAnchorID
+        }
+
+        return visibleThumbnailEntries.first { thumbnailSelectionIDs.contains($0.id) }?.id
+    }
+
     private var thumbnailEmptyMessage: String {
         if !library.thumbnailEntries.isEmpty,
            !filterText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -623,6 +696,7 @@ struct ContentView: View {
                 id: timelineClip.id,
                 url: sourceClip.item.url,
                 trim: timelineClip.trim,
+                crop: timelineClip.crop,
                 volume: adjustments.isMuted ? 0 : Float(adjustments.volume)
             )
         }
@@ -633,7 +707,7 @@ struct ContentView: View {
     }
 
     private var visibleEditorTabs: [MainPanelTab] {
-        [.preview, .videoEditor].filter { mainPanelState.isVisible($0) }
+        [.preview, .videoComposer].filter { mainPanelState.isVisible($0) }
     }
 
     private var selectedCrop: NormalizedCrop {
@@ -649,6 +723,34 @@ struct ContentView: View {
             ?? selectedPinnedItem?.crop
             ?? pinnedItems.first { $0.id == item.id }?.crop
             ?? .full
+    }
+
+    private var activeEditorCrop: NormalizedCrop {
+        if let selectedTimelineClip {
+            return timelineCropRects[selectedTimelineClip.id]
+                ?? selectedTimelineClip.crop
+                ?? .full
+        }
+
+        guard let item = activeEditorClip?.item else { return .full }
+        return cropRects[item.id]
+            ?? pinnedItems.first { $0.id == item.id }?.crop
+            ?? .full
+    }
+
+    private var activeEditorAppliedCrop: NormalizedCrop {
+        if let selectedTimelineClip {
+            return selectedTimelineClip.crop ?? .full
+        }
+
+        guard let item = activeEditorClip?.item else { return .full }
+        return appliedCrops[item.id]
+            ?? pinnedItems.first { $0.id == item.id }?.crop
+            ?? .full
+    }
+
+    private var activeEditorCanSnapshot: Bool {
+        activeEditorClip?.item.kind == .video
     }
 
     private var selectedCanTrim: Bool {
@@ -733,20 +835,12 @@ struct ContentView: View {
     }
 
     private var mainPanel: some View {
-        VStack(spacing: 0) {
-            if visibleEditorTabs.count > 1 {
-                mainPanelTabBar
-            }
-
-            activeMainPanelContent
-        }
+        activeMainPanelContent
         .background(EditorTheme.canvasBackground)
     }
 
     private var mainPanelTabBar: some View {
-        HStack(spacing: 10) {
-            Spacer(minLength: 0)
-
+        ZStack {
             HStack(spacing: 2) {
                 ForEach(visibleEditorTabs) { tab in
                     let isActive = mainPanelState.activeTab == tab
@@ -756,8 +850,9 @@ struct ContentView: View {
                         Text(tab.editorTabTitle)
                             .font(.caption.weight(.semibold))
                             .lineLimit(1)
-                            .frame(minWidth: 82)
+                            .padding(.horizontal, 12)
                             .padding(.vertical, 6)
+                            .frame(minWidth: 82)
                             .background(
                                 RoundedRectangle(cornerRadius: 7)
                                     .fill(isActive ? EditorTheme.panelRaised : Color.clear)
@@ -771,28 +866,30 @@ struct ContentView: View {
             .padding(2)
             .background(EditorTheme.panelBackground, in: RoundedRectangle(cornerRadius: 9))
 
-            Spacer(minLength: 0)
+            HStack {
+                Spacer(minLength: 0)
 
-            Button {
-                exportTimeline()
-            } label: {
-                if isExportingTimeline {
-                    ProgressView()
-                        .controlSize(.small)
-                        .frame(width: 68, height: 28)
-                } else {
-                    Label("Export", systemImage: "square.and.arrow.up")
-                        .font(.caption.weight(.bold))
-                        .labelStyle(.titleAndIcon)
-                        .frame(width: 78, height: 28)
+                Button {
+                    exportTimeline()
+                } label: {
+                    if isExportingTimeline {
+                        ProgressView()
+                            .controlSize(.small)
+                            .frame(width: 68, height: 28)
+                    } else {
+                        Label("Export", systemImage: "square.and.arrow.up")
+                            .font(.caption.weight(.bold))
+                            .labelStyle(.titleAndIcon)
+                            .frame(width: 78, height: 28)
+                    }
                 }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.black)
+                .background(EditorTheme.accent, in: RoundedRectangle(cornerRadius: 7))
+                .disabled(timelineClips.isEmpty || isExportingTimeline)
+                .quickTooltip("Export Timeline")
+                .accessibilityLabel("Export Timeline")
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(Color.black)
-            .background(EditorTheme.accent, in: RoundedRectangle(cornerRadius: 7))
-            .disabled(timelineClips.isEmpty || isExportingTimeline)
-            .quickTooltip("Export Timeline")
-            .accessibilityLabel("Export Timeline")
         }
         .frame(height: 44)
         .padding(.horizontal, 10)
@@ -809,8 +906,8 @@ struct ContentView: View {
         switch mainPanelState.activeTab {
         case .preview:
             previewMainPanel
-        case .videoEditor:
-            videoEditorPanel
+        case .videoComposer:
+            videoComposerPanel
         }
     }
 
@@ -821,7 +918,7 @@ struct ContentView: View {
         }
     }
 
-    private var videoEditorPanel: some View {
+    private var videoComposerPanel: some View {
         VSplitView {
             HSplitView {
                 clipsPane
@@ -949,10 +1046,12 @@ struct ContentView: View {
                     .frame(height: 1)
             }
 
+            playerEditingToolbar
+
             ZStack {
                 EditorTheme.windowBackground
 
-                if isShowingTimelinePlayback {
+                if isShowingTimelinePlayback && !isPlayerCropToolActive {
                     TimelineSequenceVideoView(
                         clips: timelinePlaybackClips,
                         seekRequest: timelineSeekRequest,
@@ -962,12 +1061,12 @@ struct ContentView: View {
                     PreviewPane(
                         item: clip.item,
                         zoomMultiplier: 1,
-                        isCropToolActive: false,
-                        appliedCrop: .full,
+                        isCropToolActive: isPlayerCropToolActive,
+                        appliedCrop: activeEditorAppliedCrop,
                         appliedTrim: activeTimelineTrimForPreview,
-                        onApplyCrop: { },
+                        onApplyCrop: applyActiveEditorCrop,
                         onVideoTimeChange: { editorPlayerTime = $0 },
-                        crop: .constant(.full)
+                        crop: activeEditorCropBinding(for: clip.item)
                     )
                     .id(activeEditorPreviewID(for: clip))
                 } else {
@@ -1015,6 +1114,97 @@ struct ContentView: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .background(EditorTheme.panelBackground, in: RoundedRectangle(cornerRadius: 7))
+        }
+    }
+
+    private var playerEditingToolbar: some View {
+        HStack(spacing: 4) {
+            Button {
+                snapshotActiveEditorFrame()
+            } label: {
+                if isCapturingSnapshot {
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(width: 28, height: 26)
+                } else {
+                    Image(systemName: "camera")
+                        .font(.system(size: 14, weight: .medium))
+                        .frame(width: 28, height: 26)
+                }
+            }
+            .buttonStyle(.plain)
+            .disabled(!activeEditorCanSnapshot || isCapturingSnapshot)
+            .quickTooltip("Snapshot Current Frame")
+            .accessibilityLabel("Snapshot Current Frame")
+
+            Button {
+                isPlayerCropToolActive.toggle()
+                if isPlayerCropToolActive {
+                    isCropToolActive = false
+                    isTrimToolActive = false
+                }
+            } label: {
+                Image(systemName: "crop")
+                    .font(.system(size: 14, weight: .medium))
+                    .frame(width: 28, height: 26)
+            }
+            .buttonStyle(.plain)
+            .disabled(activeEditorClip == nil)
+            .foregroundStyle(isPlayerCropToolActive ? EditorTheme.accent : EditorTheme.primaryText)
+            .quickTooltip("Crop Tool")
+            .accessibilityLabel("Crop Tool")
+
+            Menu {
+                Button("Square 1:1") {
+                    applyActiveEditorCropPreset(width: 1, height: 1)
+                }
+                Button("Portrait 4:5") {
+                    applyActiveEditorCropPreset(width: 4, height: 5)
+                }
+                Button("Story/Reel 9:16") {
+                    applyActiveEditorCropPreset(width: 9, height: 16)
+                }
+                Button("Landscape 16:9") {
+                    applyActiveEditorCropPreset(width: 16, height: 9)
+                }
+                Button("Classic 4:3") {
+                    applyActiveEditorCropPreset(width: 4, height: 3)
+                }
+                Button("Open Graph 1.91:1") {
+                    applyActiveEditorCropPreset(width: 1.91, height: 1)
+                }
+            } label: {
+                Image(systemName: "aspectratio")
+                    .font(.system(size: 14, weight: .medium))
+                    .frame(width: 28, height: 26)
+            }
+            .buttonStyle(.plain)
+            .disabled(activeEditorClip == nil)
+            .quickTooltip("Crop Presets")
+            .accessibilityLabel("Crop Presets")
+
+            Button {
+                clearActiveEditorCrop()
+            } label: {
+                Image(systemName: "arrow.counterclockwise")
+                    .font(.system(size: 13, weight: .medium))
+                    .frame(width: 28, height: 26)
+            }
+            .buttonStyle(.plain)
+            .disabled(activeEditorClip == nil || (activeEditorCrop.isFullFrame && activeEditorAppliedCrop.isFullFrame))
+            .quickTooltip("Reset Crop")
+            .accessibilityLabel("Reset Crop")
+
+            Spacer(minLength: 0)
+        }
+        .frame(height: 34)
+        .padding(.horizontal, 10)
+        .foregroundStyle(EditorTheme.primaryText)
+        .background(EditorTheme.toolbarBackground)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(EditorTheme.hairline)
+                .frame(height: 1)
         }
     }
 
@@ -1190,6 +1380,7 @@ struct ContentView: View {
                             sourceClip: sourceClip,
                             thumbnail: sourceClip.flatMap(editorClipThumbnail(for:)),
                             isSelected: selectedTimelineClipID == clip.id,
+                            hasCrop: clip.crop?.isFullFrame == false,
                             playheadProgress: timelinePlayheadProgress(for: clip),
                             trim: trim,
                             totalDuration: duration,
@@ -1272,6 +1463,9 @@ struct ContentView: View {
 
             Button {
                 isCropToolActive.toggle()
+                if isCropToolActive {
+                    isPlayerCropToolActive = false
+                }
             } label: {
                 Image(systemName: "crop")
                     .font(.system(size: 14, weight: .medium))
@@ -1567,7 +1761,7 @@ struct ContentView: View {
             return true
         }
 
-        if mainPanelState.activeTab == .videoEditor,
+        if mainPanelState.activeTab == .videoComposer,
            selectedTimelineClipID != nil {
             switch event.keyCode {
             case 51, 117:
@@ -1622,9 +1816,21 @@ struct ContentView: View {
 
     private func cropBinding(for item: MediaItem) -> Binding<NormalizedCrop> {
         Binding {
-            cropRects[item.id] ?? selectedPinnedItem?.crop ?? .full
+            cropRects[item.id] ?? pinnedItems.first { $0.id == item.id }?.crop ?? .full
         } set: { newValue in
             cropRects[item.id] = newValue.clamped()
+        }
+    }
+
+    private func activeEditorCropBinding(for item: MediaItem) -> Binding<NormalizedCrop> {
+        Binding {
+            activeEditorCrop
+        } set: { newValue in
+            if let selectedTimelineClipID {
+                timelineCropRects[selectedTimelineClipID] = newValue.clamped()
+            } else {
+                cropRects[item.id] = newValue.clamped()
+            }
         }
     }
 
@@ -1651,6 +1857,24 @@ struct ContentView: View {
         )
         isCropToolActive = true
         isTrimToolActive = false
+        isPlayerCropToolActive = false
+    }
+
+    private func applyActiveEditorCropPreset(width: CGFloat, height: CGFloat) {
+        guard let clip = activeEditorClip else { return }
+        let naturalSize = clip.status?.size ?? CGSize(width: width, height: height)
+        let crop = NormalizedCrop.centered(
+            aspectRatio: width / height,
+            naturalSize: naturalSize
+        )
+        if let selectedTimelineClipID {
+            timelineCropRects[selectedTimelineClipID] = crop
+        } else {
+            cropRects[clip.item.id] = crop
+        }
+        isPlayerCropToolActive = true
+        isCropToolActive = false
+        isTrimToolActive = false
     }
 
     private func clearSelectedCrop() {
@@ -1663,6 +1887,24 @@ struct ContentView: View {
         isCropToolActive = false
     }
 
+    private func clearActiveEditorCrop() {
+        if let selectedTimelineClip,
+           let index = timelineClips.firstIndex(where: { $0.id == selectedTimelineClip.id }) {
+            timelineCropRects[selectedTimelineClip.id] = .full
+            timelineClips[index].crop = nil
+            isPlayerCropToolActive = false
+            return
+        }
+
+        guard let item = activeEditorClip?.item else { return }
+        cropRects[item.id] = .full
+        appliedCrops[item.id] = nil
+        if let index = pinnedItems.firstIndex(where: { $0.id == item.id }) {
+            pinnedItems[index].crop = nil
+        }
+        isPlayerCropToolActive = false
+    }
+
     private func applySelectedCrop() {
         guard let item = selectedItem else { return }
         let crop = selectedCrop.clamped()
@@ -1670,6 +1912,25 @@ struct ContentView: View {
         appliedCrops[item.id] = crop
         cropRects[item.id] = crop
         isCropToolActive = false
+    }
+
+    private func applyActiveEditorCrop() {
+        if let selectedTimelineClip,
+           let index = timelineClips.firstIndex(where: { $0.id == selectedTimelineClip.id }) {
+            let crop = activeEditorCrop.clamped()
+            guard !crop.isFullFrame else { return }
+            timelineClips[index].crop = crop
+            timelineCropRects[selectedTimelineClip.id] = crop
+            isPlayerCropToolActive = false
+            return
+        }
+
+        guard let item = activeEditorClip?.item else { return }
+        let crop = activeEditorCrop.clamped()
+        guard !crop.isFullFrame else { return }
+        appliedCrops[item.id] = crop
+        cropRects[item.id] = crop
+        isPlayerCropToolActive = false
     }
 
     private func prepareSelectedTrimDraft() {
@@ -1741,17 +2002,31 @@ struct ContentView: View {
            visibleItems.contains(where: { $0.id == selectedID })
             || pinnedItems.contains(where: { $0.id == selectedID }) {
             if activePanel == .thumbnail {
-                thumbnailSelectionID = selectedID
+                thumbnailSelectionIDs = [selectedID]
+                thumbnailSelectionAnchorID = selectedID
             }
             return
         }
 
-        if let currentSelection = thumbnailSelectionID,
-           visibleThumbnailEntries.contains(where: { $0.id == currentSelection }) {
+        let visibleSelectionIDs = thumbnailSelectionIDs.filter { selectionID in
+            visibleThumbnailEntries.contains { $0.id == selectionID }
+        }
+        if !visibleSelectionIDs.isEmpty {
+            thumbnailSelectionIDs = visibleSelectionIDs
+            if let thumbnailSelectionAnchorID,
+               !visibleSelectionIDs.contains(thumbnailSelectionAnchorID) {
+                self.thumbnailSelectionAnchorID = visibleSelectionIDs.first
+            }
             return
         }
 
-        thumbnailSelectionID = visibleThumbnailEntries.first?.id
+        if let firstEntry = visibleThumbnailEntries.first {
+            thumbnailSelectionIDs = [firstEntry.id]
+            thumbnailSelectionAnchorID = firstEntry.id
+        } else {
+            thumbnailSelectionIDs = []
+            thumbnailSelectionAnchorID = nil
+        }
         library.selectedID = visibleItems.first?.id
     }
 
@@ -1779,7 +2054,7 @@ struct ContentView: View {
             return
         }
 
-        let currentIndex = thumbnailSelectionID.flatMap { selectionID in
+        let currentIndex = primaryThumbnailSelectionID.flatMap { selectionID in
             entries.firstIndex { $0.id == selectionID }
         } ?? (offset > 0 ? -1 : entries.count)
         let nextIndex = min(max(currentIndex + offset, entries.startIndex), entries.index(before: entries.endIndex))
@@ -1801,7 +2076,8 @@ struct ContentView: View {
 
     private func activateThumbnailEntry(_ entry: ThumbnailPanelEntry) {
         activePanel = .thumbnail
-        thumbnailSelectionID = entry.id
+        thumbnailSelectionIDs = [entry.id]
+        thumbnailSelectionAnchorID = entry.id
 
         switch entry {
         case .folder(let folderEntry):
@@ -1811,12 +2087,64 @@ struct ContentView: View {
         }
     }
 
+    private func handleThumbnailEntryTap(_ entry: ThumbnailPanelEntry) {
+        activePanel = .thumbnail
+
+        let flags = NSApp.currentEvent?.modifierFlags ?? []
+        if flags.contains(.shift) {
+            selectThumbnailRange(through: entry)
+        } else if flags.contains(.command) {
+            toggleThumbnailSelection(entry)
+        } else {
+            thumbnailSelectionIDs = [entry.id]
+            thumbnailSelectionAnchorID = entry.id
+        }
+
+        if let item = entry.item {
+            library.selectedID = item.id
+        }
+    }
+
+    private func selectThumbnailRange(through entry: ThumbnailPanelEntry) {
+        let entries = visibleThumbnailEntries
+        guard let targetIndex = entries.firstIndex(where: { $0.id == entry.id }) else {
+            return
+        }
+
+        let anchorID = thumbnailSelectionAnchorID ?? primaryThumbnailSelectionID ?? entry.id
+        guard let anchorIndex = entries.firstIndex(where: { $0.id == anchorID }) else {
+            thumbnailSelectionIDs = [entry.id]
+            thumbnailSelectionAnchorID = entry.id
+            return
+        }
+
+        let range = min(anchorIndex, targetIndex)...max(anchorIndex, targetIndex)
+        thumbnailSelectionIDs = Set(entries[range].map(\.id))
+    }
+
+    private func toggleThumbnailSelection(_ entry: ThumbnailPanelEntry) {
+        if thumbnailSelectionIDs.contains(entry.id) {
+            thumbnailSelectionIDs.remove(entry.id)
+            if thumbnailSelectionAnchorID == entry.id {
+                thumbnailSelectionAnchorID = primaryThumbnailSelectionID
+            }
+        } else {
+            thumbnailSelectionIDs.insert(entry.id)
+            thumbnailSelectionAnchorID = entry.id
+        }
+
+        if thumbnailSelectionIDs.isEmpty {
+            thumbnailSelectionAnchorID = nil
+        }
+    }
+
     private func moveToPreviousPanel() {
         guard activePanel == .pinned else { return }
         activePanel = .thumbnail
         if let selectedID = library.selectedID,
            visibleThumbnailEntries.contains(where: { $0.id == selectedID }) {
-            thumbnailSelectionID = selectedID
+            thumbnailSelectionIDs = [selectedID]
+            thumbnailSelectionAnchorID = selectedID
             return
         }
 
@@ -1836,20 +2164,25 @@ struct ContentView: View {
     }
 
     private func addToEditorClips(_ item: MediaItem) {
+        addToEditorClips([item])
+    }
+
+    private func addToEditorClips(_ items: [MediaItem]) {
+        guard !items.isEmpty else { return }
         selectedTimelineClipID = nil
 
-        if editorClips.contains(where: { $0.id == item.id }) {
-            selectedEditorClipID = item.id
-        } else {
-            editorClips.append(EditorClip(
-                item: item,
-                thumbnail: library.thumbnails[item.url],
-                status: item.id == selectedItem?.id ? selectedStatus : nil
-            ))
-            selectedEditorClipID = item.id
+        for item in items {
+            if !editorClips.contains(where: { $0.id == item.id }) {
+                editorClips.append(EditorClip(
+                    item: item,
+                    thumbnail: library.thumbnails[item.url],
+                    status: item.id == selectedItem?.id ? selectedStatus : nil
+                ))
+            }
         }
+        selectedEditorClipID = items.last?.id
 
-        mainPanelState.show(.videoEditor)
+        mainPanelState.show(.videoComposer)
     }
 
     private func addTimelineClip(sourceClipID: EditorClip.ID) {
@@ -1895,6 +2228,12 @@ struct ContentView: View {
     }
 
     private func addActiveThumbnailToEditorClips() -> Bool {
+        let selectedItems = selectedThumbnailItems
+        if selectedItems.count > 1 {
+            addToEditorClips(selectedItems)
+            return true
+        }
+
         guard let item = activeThumbnailItem() else {
             return false
         }
@@ -1908,17 +2247,23 @@ struct ContentView: View {
             return nil
         }
 
-        if let thumbnailSelectionID,
+        if let thumbnailSelectionID = primaryThumbnailSelectionID,
            let item = visibleThumbnailEntries.first(where: { $0.id == thumbnailSelectionID })?.item {
             return item
         }
 
-        return thumbnailSelectionID == nil ? selectedItem : nil
+        return thumbnailSelectionIDs.isEmpty ? selectedItem : nil
     }
 
     private func removeEditorClip(_ clip: EditorClip) {
         editorClips.removeAll { $0.id == clip.id }
+        let removedTimelineClipIDs = timelineClips
+            .filter { $0.sourceClipID == clip.id }
+            .map(\.id)
         timelineClips.removeAll { $0.sourceClipID == clip.id }
+        for clipID in removedTimelineClipIDs {
+            timelineCropRects[clipID] = nil
+        }
         if selectedEditorClipID == clip.id {
             selectedEditorClipID = editorClips.first?.id
         }
@@ -2148,7 +2493,8 @@ struct ContentView: View {
         timelineClips[index].trim = MediaTrim(start: trim.start, end: splitTime).clamped(to: duration)
         let rightClip = EditorTimelineClip(
             sourceClipID: selectedTimelineClip.sourceClipID,
-            trim: MediaTrim(start: splitTime, end: trim.end).clamped(to: duration)
+            trim: MediaTrim(start: splitTime, end: trim.end).clamped(to: duration),
+            crop: selectedTimelineClip.crop
         )
         timelineClips.insert(rightClip, at: timelineClips.index(after: index))
         selectTimelineClip(rightClip)
@@ -2250,6 +2596,7 @@ struct ContentView: View {
     private func removeTimelineClip(_ clip: EditorTimelineClip) {
         let removedIndex = timelineClips.firstIndex { $0.id == clip.id }
         timelineClips.removeAll { $0.id == clip.id }
+        timelineCropRects[clip.id] = nil
 
         if selectedTimelineClipID == clip.id {
             if let removedIndex, !timelineClips.isEmpty {
@@ -2315,6 +2662,7 @@ struct ContentView: View {
             return TimelineExportClip(
                 item: sourceClip.item,
                 trim: timelineClip.trim,
+                crop: timelineClip.crop,
                 volume: adjustments.isMuted ? 0 : Float(adjustments.volume)
             )
         }
@@ -2390,10 +2738,22 @@ struct ContentView: View {
         }
     }
 
+    private func pin(_ items: [MediaItem]) {
+        for item in items {
+            pin(item)
+        }
+    }
+
     private func pinActiveThumbnailOrPreview() {
         guard activePanel == .thumbnail else { return }
 
-        if let thumbnailSelectionID,
+        let selectedItems = selectedThumbnailItems
+        if selectedItems.count > 1 {
+            pin(selectedItems)
+            return
+        }
+
+        if let thumbnailSelectionID = primaryThumbnailSelectionID,
            let item = visibleThumbnailEntries.first(where: { $0.id == thumbnailSelectionID })?.item {
             pin(item)
             return
@@ -2438,6 +2798,36 @@ struct ContentView: View {
         }
     }
 
+    private func snapshotActiveEditorFrame() {
+        guard let item = activeEditorClip?.item,
+              item.kind == .video,
+              !isCapturingSnapshot
+        else {
+            return
+        }
+
+        let snapshotTime = activeEditorSnapshotTime()
+        let snapshotCrop = isPlayerCropToolActive ? .full : activeEditorAppliedCrop
+        isCapturingSnapshot = true
+
+        Task {
+            do {
+                let snapshot = try await MediaSnapshot.captureVideoFrame(
+                    from: item,
+                    at: snapshotTime,
+                    crop: snapshotCrop
+                )
+                pinnedItems.append(PinnedMediaItem(item: snapshot.item))
+                pinnedThumbnails[snapshot.item.url] = snapshot.thumbnail
+                activePanel = .pinned
+                library.selectedID = snapshot.item.id
+            } catch {
+                showSnapshotFailure(error)
+            }
+            isCapturingSnapshot = false
+        }
+    }
+
     private func selectedSnapshotTime() -> TimeInterval {
         guard let duration = selectedStatus.duration else {
             return max(0, previewVideoTime)
@@ -2447,6 +2837,17 @@ struct ContentView: View {
         let lowerBound = trim?.start ?? 0
         let upperBound = trim?.end ?? duration
         return min(max(previewVideoTime, lowerBound), upperBound)
+    }
+
+    private func activeEditorSnapshotTime() -> TimeInterval {
+        guard let duration = activeEditorClip?.status?.duration else {
+            return max(0, editorPlayerTime)
+        }
+
+        let trim = activeTimelineTrimForPreview?.clamped(to: duration)
+        let lowerBound = trim?.start ?? 0
+        let upperBound = trim?.end ?? duration
+        return min(max(editorPlayerTime, lowerBound), upperBound)
     }
 
     private func showSnapshotFailure(_ error: Error) {
@@ -2487,8 +2888,40 @@ struct ContentView: View {
         pinnedItems.contains(where: { $0.id == item.id }) ? "Pinned" : "Pin File"
     }
 
+    private func pinMenuTitle(for items: [MediaItem]) -> String {
+        guard items.count > 1 else {
+            return items.first.map(pinMenuTitle(for:)) ?? "Pin File"
+        }
+
+        let allPinned = items.allSatisfy { item in
+            pinnedItems.contains(where: { $0.id == item.id })
+        }
+        return allPinned ? "Pinned" : "Pin \(items.count) Files"
+    }
+
     private func editorClipMenuTitle(for item: MediaItem) -> String {
         editorClips.contains(where: { $0.id == item.id }) ? "Show in Clips" : "Add to Clips"
+    }
+
+    private func editorClipMenuTitle(for items: [MediaItem]) -> String {
+        guard items.count > 1 else {
+            return items.first.map(editorClipMenuTitle(for:)) ?? "Add to Clips"
+        }
+
+        let allInClips = items.allSatisfy { item in
+            editorClips.contains(where: { $0.id == item.id })
+        }
+        return allInClips ? "Show in Clips" : "Add \(items.count) to Clips"
+    }
+
+    private func thumbnailContextItems(for item: MediaItem) -> [MediaItem] {
+        let selectedItems = selectedThumbnailItems
+        if selectedItems.count > 1,
+           thumbnailSelectionIDs.contains(item.id) {
+            return selectedItems
+        }
+
+        return [item]
     }
 
     private func pinnedThumbnail(for item: MediaItem) -> NSImage? {
@@ -2659,8 +3092,8 @@ private extension MainPanelTab {
         switch self {
         case .preview:
             return "Media"
-        case .videoEditor:
-            return "Video Editor"
+        case .videoComposer:
+            return "Video Composer"
         }
     }
 }
@@ -2676,6 +3109,7 @@ private struct EditorTimelineClip: Identifiable, Hashable {
     let id = UUID()
     let sourceClipID: EditorClip.ID
     var trim: MediaTrim? = nil
+    var crop: NormalizedCrop? = nil
     var adjustments = EditorTimelineAdjustments()
 }
 
@@ -3112,6 +3546,7 @@ private struct TimelineClipBlock: View {
     let sourceClip: EditorClip?
     let thumbnail: NSImage?
     let isSelected: Bool
+    let hasCrop: Bool
     let playheadProgress: Double?
     let trim: MediaTrim
     let totalDuration: TimeInterval
@@ -3180,6 +3615,18 @@ private struct TimelineClipBlock: View {
                         .frame(width: 2)
                         .offset(x: max(0, min(geometry.size.width - 2, geometry.size.width * playheadProgress)))
                         .shadow(color: .black.opacity(0.25), radius: 2)
+                }
+            }
+            .overlay(alignment: .topTrailing) {
+                if hasCrop {
+                    Image(systemName: "crop")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(Color.black)
+                        .frame(width: 16, height: 16)
+                        .background(EditorTheme.accent, in: Circle())
+                        .padding(3)
+                        .quickTooltip("Cropped")
+                        .accessibilityLabel("Cropped")
                 }
             }
             .overlay(alignment: .leading) {
@@ -3513,6 +3960,8 @@ private struct CropOverlay: View {
                             x: min(max(cropRect.maxX - 38, 42), geometry.size.width - 42),
                             y: min(max(cropRect.minY + 22, 22), geometry.size.height - 22)
                         )
+                        .zIndex(2)
+                        .allowsHitTesting(true)
                         .quickTooltip("Apply Crop")
                     }
                 }
