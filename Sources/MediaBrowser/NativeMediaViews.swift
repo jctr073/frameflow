@@ -699,13 +699,23 @@ private final class TimelineSequenceVideoController: ObservableObject {
                 .applying(preferredTransform)
                 .standardized
             let displaySize = CGSize(width: abs(transformedBounds.width), height: abs(transformedBounds.height))
+            let normalize = CGAffineTransform(
+                translationX: -transformedBounds.minX,
+                y: -transformedBounds.minY
+            )
+            let displayTransform = preferredTransform.concatenating(normalize)
             let clipCrop = clip.crop ?? .full
             let cropRect = clipCrop.pixelRect(in: displaySize)
-            let visibleSize = cropRect.width > 1 && cropRect.height > 1 ? cropRect.size : displaySize
+            let sourceCropRect = cropRect
+                .applying(displayTransform.inverted())
+                .standardized
+                .intersection(CGRect(origin: .zero, size: naturalSize))
+                .integral
+            let hasVisibleCrop = !clipCrop.isFullFrame && sourceCropRect.width > 1 && sourceCropRect.height > 1
             if renderSize == nil {
                 renderSize = CGSize(
-                    width: evenPlaybackDimension(visibleSize.width),
-                    height: evenPlaybackDimension(visibleSize.height)
+                    width: evenPlaybackDimension(displaySize.width),
+                    height: evenPlaybackDimension(displaySize.height)
                 )
             }
 
@@ -719,37 +729,27 @@ private final class TimelineSequenceVideoController: ObservableObject {
 
             let layerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: compositionVideoTrack)
             if let renderSize {
-                let scale = min(renderSize.width / max(visibleSize.width, 1), renderSize.height / max(visibleSize.height, 1))
-                let scaledSize = CGSize(width: visibleSize.width * scale, height: visibleSize.height * scale)
-                let cropFrame = CGRect(
+                let scale = min(renderSize.width / max(displaySize.width, 1), renderSize.height / max(displaySize.height, 1))
+                let scaledSize = CGSize(width: displaySize.width * scale, height: displaySize.height * scale)
+                let displayFrame = CGRect(
                     x: (renderSize.width - scaledSize.width) / 2,
                     y: (renderSize.height - scaledSize.height) / 2,
                     width: scaledSize.width,
                     height: scaledSize.height
                 )
-                let normalize = CGAffineTransform(
-                    translationX: -transformedBounds.minX,
-                    y: -transformedBounds.minY
-                )
-                let crop = CGAffineTransform(
-                    translationX: -cropRect.minX,
-                    y: -cropRect.minY
-                )
                 let fit = CGAffineTransform(scaleX: scale, y: scale)
                 let center = CGAffineTransform(
-                    translationX: cropFrame.minX,
-                    y: cropFrame.minY
+                    translationX: displayFrame.minX,
+                    y: displayFrame.minY
                 )
                 layerInstruction.setTransform(
-                    preferredTransform
-                        .concatenating(normalize)
-                        .concatenating(crop)
+                    displayTransform
                         .concatenating(fit)
                         .concatenating(center),
                     at: cursor
                 )
-                if !clipCrop.isFullFrame {
-                    layerInstruction.setCropRectangle(cropFrame, at: cursor)
+                if hasVisibleCrop {
+                    layerInstruction.setCropRectangle(sourceCropRect, at: cursor)
                 }
             } else {
                 layerInstruction.setTransform(preferredTransform, at: cursor)
