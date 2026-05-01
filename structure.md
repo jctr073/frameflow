@@ -7,95 +7,87 @@ ContentView
 └─ VStack
    ├─ mainPanelTabBar
    │  ├─ Media tab
-   │  ├─ Video Composer tab
+   │  ├─ Composer tab
    │  └─ Export Timeline button
    │
-   ├─ HSplitView
-   │  ├─ thumbnailPanel
-   │  │  ├─ folderHeader
-   │  │  │  ├─ Open Folder button
-   │  │  │  └─ Current folder title
-   │  │  ├─ filterControl
-   │  │  │  ├─ Filter icon«
-   │  │  │  ├─ Filter files TextField
-   │  │  │  └─ Clear Filter button
-   │  │  └─ List
-   │  │     ├─ FolderRow
-   │  │     └─ ThumbnailRow
+   ├─ activeWorkbench
+   │  ├─ mediaWorkbench (Media tab)
+   │  │  └─ HSplitView
+   │  │     ├─ thumbnailPanel
+   │  │     ├─ previewMainPanel
+   │  │     └─ pinnedPanel
    │  │
-   │  ├─ mainPanel
-   │  │  ├─ previewMainPanel
-   │  │  │  ├─ editingToolbar
-   │  │  │  │  ├─ Snapshot Current Frame
-   │  │  │  │  ├─ Crop Tool
-   │  │  │  │  ├─ Crop Presets
-   │  │  │  │  ├─ Reset Crop
-   │  │  │  │  ├─ Trim Tool
-   │  │  │  │  ├─ Reset Trim
-   │  │  │  │  ├─ TrimControls
-   │  │  │  │  │  ├─ TrimRangeSlider
-   │  │  │  │  │  ├─ Start time TextField
-   │  │  │  │  │  ├─ End time TextField
-   │  │  │  │  │  └─ Apply Trim button
-   │  │  │  │  ├─ Undo Edits
-   │  │  │  │  ├─ Apply Crop / Apply Trim
-   │  │  │  │  ├─ Move Edited Media to Pinned
-   │  │  │  │  └─ editSummaryLabel
-   │  │  │  └─ previewPanel
-   │  │  │     └─ PreviewPane
-   │  │  │        ├─ StaticImagePreview / NativeGIFImageView / NativeWebImageView
-   │  │  │        ├─ NativeVideoView
-   │  │  │        │  ├─ NativeVideoSurface
-   │  │  │        │  └─ NativeVideoControls
-   │  │  │        └─ CropOverlay
-   │  │  │           ├─ CropDimShape
-   │  │  │           ├─ crop drag/resize handles
-   │  │  │           └─ Apply Crop button
-   │  │  └─ videoComposerPanel
-   │  │     ├─ clipsPane
-   │  │     │  ├─ Clips header
-   │  │     │  ├─ Import Clips button
-   │  │     │  └─ EditorClipCard grid
-   │  │     ├─ playerPane
-   │  │     │  ├─ selected media-bin clip or active timeline clip header
-   │  │     │  ├─ selected timeline clip audio mute / volume controls
-   │  │     │  ├─ playerEditingToolbar
-   │  │     │  │  ├─ Snapshot Current Frame
-   │  │     │  │  ├─ Crop Tool
-   │  │     │  │  ├─ Crop Presets
-   │  │     │  │  └─ Reset Crop
-   │  │     │  ├─ PreviewPane for media-bin preview
-   │  │     │  └─ TimelineSequenceVideoView for full timeline playback
-   │  │     └─ timelinePane
-   │  │        ├─ timeline toolbar
-   │  │        │  ├─ Export Timeline
-   │  │        │  ├─ Reset Timeline Trim
-   │  │        │  ├─ Split Clip
-   │  │        │  ├─ Delete Timeline Clip
-   │  │        │  └─ Timeline Zoom slider
-   │  │        ├─ timelineRuler
-   │  │        ├─ Video track drop target
-   │  │        │  └─ TimelineClipBlock list
-   │  │        │     ├─ selected playhead indicator
-   │  │        │     ├─ drag-to-reorder behavior
-   │  │        │     ├─ trim start handle
-   │  │        │     └─ trim end handle
-   │  │
-   │  └─ pinnedPanel
-   │     ├─ Pinned header toolbar
-   │     │  ├─ "Pinned" title
-   │     │  ├─ Copy Pinned Files
-   │     │  ├─ Clear Pinned Files
-   │     │  └─ pinned count
-   │     └─ List
-   │        └─ ThumbnailRow
+   │  └─ composerWorkbench (Composer tab)
+   │     └─ VSplitView
+   │        ├─ HSplitView
+   │        │  ├─ thumbnailPanel
+   │        │  ├─ clipsPane
+   │        │  ├─ playerPane
+   │        │  └─ pinnedPanel
+   │        └─ timelinePane
    │
    └─ statusBar
       ├─ Open Folder button
       ├─ Open Terminal Here button
+      ├─ theme accent status dot
       ├─ statusPathText
-      ├─ selectedStatus.detailText
-      └─ statusCountText
+      ├─ statusCountText
+      └─ selectedStatus.detailText
+```
+
+## Panel Contents
+
+```text
+thumbnailPanel
+├─ panelColumnHeader ("Folders", Open Folder button, file count)
+├─ filterControl
+├─ thumbnailBatchControl
+└─ vertical List
+   ├─ FolderRow
+   └─ ThumbnailRow
+
+previewMainPanel
+├─ mediaPreviewHeader
+├─ editingToolbar
+└─ previewPanel
+   └─ PreviewPane
+      ├─ StaticImagePreview / NativeGIFImageView / NativeWebImageView
+      ├─ NativeVideoView
+      │  ├─ NativeVideoSurface
+      │  └─ NativeVideoControls
+      └─ CropOverlay
+
+clipsPane
+├─ panelColumnHeader ("Project", Add button)
+└─ vertical EditorClipCard stack
+
+playerPane
+├─ selected media-bin clip or active timeline clip header
+├─ selected timeline clip audio mute / volume controls
+├─ playerEditingToolbar
+├─ PreviewPane for media-bin preview
+└─ TimelineSequenceVideoView for full timeline playback
+
+timelinePane
+├─ timeline toolbar
+│  ├─ Export Timeline
+│  ├─ Reset Timeline Trim
+│  ├─ Split Clip
+│  ├─ Delete Timeline Clip
+│  └─ Timeline Zoom slider
+├─ timelineRuler
+└─ Video track drop target
+   └─ TimelineClipBlock list
+      ├─ selected playhead indicator
+      ├─ drag-to-reorder behavior
+      ├─ trim start handle
+      └─ trim end handle
+
+pinnedPanel
+├─ panelColumnHeader ("Pinned", Copy Pinned Files, Clear Pinned Files, pinned count)
+├─ empty state
+└─ vertical List
+   └─ ThumbnailRow
 ```
 
 ## Root Overlays And Helpers
@@ -112,7 +104,11 @@ ContentView overlays/background helpers
 ```text
 View menu
 ├─ Preview Panel checkbox
-└─ Video Composer Panel checkbox
+├─ Composer Panel checkbox
+└─ Color Theme
+   ├─ Amber studio
+   ├─ Resolve teal
+   └─ Final cut sapphire
 ```
 
 ## Panel State
@@ -179,12 +175,13 @@ honors those audio settings.
 ## Code Anchors
 
 - Main app shell: `Sources/MediaBrowser/ContentView.swift`
+- Theme model and palettes: `Sources/MediaBrowser/EditorTheme.swift`
 - Main panel tab state: `Sources/MediaBrowser/MainPanelState.swift`
 - `thumbnailPanel`: `Sources/MediaBrowser/ContentView.swift`
 - `pinnedPanel`: `Sources/MediaBrowser/ContentView.swift`
 - `statusBar`: `Sources/MediaBrowser/ContentView.swift`
-- `mainPanel`, `mainPanelTabBar`, `editingToolbar`, `previewPanel`: `Sources/MediaBrowser/ContentView.swift`
-- `videoComposerPanel`, `clipsPane`, `playerPane`, `timelinePane`: `Sources/MediaBrowser/ContentView.swift`
+- `mainPanelTabBar`, `activeWorkbench`, `mediaWorkbench`, `composerWorkbench`: `Sources/MediaBrowser/ContentView.swift`
+- `clipsPane`, `playerPane`, `timelinePane`, `editingToolbar`, `previewPanel`: `Sources/MediaBrowser/ContentView.swift`
 - `TimelineSequenceVideoView`: `Sources/MediaBrowser/NativeMediaViews.swift`
 - timeline export: `Sources/MediaBrowser/MediaEditing.swift`
 - `TrimControls`: `Sources/MediaBrowser/ContentView.swift`

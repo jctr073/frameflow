@@ -11,7 +11,7 @@ enum MainPanelTab: Hashable, Identifiable {
         case .preview:
             return "Preview"
         case .videoComposer:
-            return "Video Composer"
+            return "Composer"
         }
     }
 
@@ -27,7 +27,7 @@ enum MainPanelTab: Hashable, Identifiable {
 
 @MainActor
 final class MainPanelState: ObservableObject {
-    @Published private(set) var visibleTabs: Set<MainPanelTab> = [.preview]
+    @Published private(set) var visibleTabs: Set<MainPanelTab> = [.preview, .videoComposer]
     @Published var activeTab: MainPanelTab = .preview
 
     func isVisible(_ tab: MainPanelTab) -> Bool {

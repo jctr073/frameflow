@@ -3,6 +3,7 @@ import SwiftUI
 @main
 struct MediaBrowserApp: App {
     @StateObject private var mainPanelState = MainPanelState()
+    @AppStorage("editorThemeID") private var editorThemeRawValue = EditorThemeID.amberStudio.rawValue
 
     private let initialFolderURL: URL?
 
@@ -22,6 +23,7 @@ struct MediaBrowserApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView(initialFolderURL: initialFolderURL, mainPanelState: mainPanelState)
+                .environment(\.editorTheme, selectedTheme.palette)
                 .frame(minWidth: 760, minHeight: 500)
         }
         .commands {
@@ -34,11 +36,29 @@ struct MediaBrowserApp: App {
                     set: { mainPanelState.setVisible(.preview, $0) }
                 ))
 
-                Toggle("Video Composer Panel", isOn: Binding(
+                Toggle("Composer Panel", isOn: Binding(
                     get: { mainPanelState.isVisible(.videoComposer) },
                     set: { mainPanelState.setVisible(.videoComposer, $0, activate: $0) }
                 ))
+
+                Menu("Color Theme") {
+                    ForEach(EditorThemeID.allCases) { theme in
+                        Button {
+                            editorThemeRawValue = theme.rawValue
+                        } label: {
+                            if selectedTheme == theme {
+                                Label(theme.title, systemImage: "checkmark")
+                            } else {
+                                Text(theme.title)
+                            }
+                        }
+                    }
+                }
             }
         }
+    }
+
+    private var selectedTheme: EditorThemeID {
+        EditorThemeID(rawValue: editorThemeRawValue) ?? .amberStudio
     }
 }
