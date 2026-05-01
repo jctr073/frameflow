@@ -71,7 +71,7 @@ struct ContentView: View {
 
     private let initialFolderURL: URL?
     private let zoomLevels = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0]
-    private let sidePanelRowInsets = EdgeInsets(top: 8, leading: 18, bottom: 8, trailing: 18)
+    private let sidePanelRowInsets = EdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 10)
     private let topToolbarHeight: CGFloat = 48
     private let timelineBasePixelsPerSecond: CGFloat = 12
 
@@ -89,7 +89,7 @@ struct ContentView: View {
 
             statusBar
         }
-        .padding(10)
+        .padding(6)
         .background {
             RoundedRectangle(cornerRadius: 16)
                 .fill(theme.windowBackground)
@@ -101,6 +101,7 @@ struct ContentView: View {
         .overlay(dropOverlay)
         .quickTooltipOverlay()
         .background(KeyboardMonitor(onKeyDown: handleKeyDown).frame(width: 0, height: 0))
+        .background(SplitViewResizeCursorInstaller().frame(width: 0, height: 0))
         .onDrop(of: [UTType.fileURL.identifier], isTargeted: $isDropTargeted, perform: handleDrop)
         .task {
             if let initialFolderURL, library.folderURL == nil {
@@ -235,7 +236,7 @@ struct ContentView: View {
         HStack(spacing: 8) {
             Text(title.uppercased())
                 .font(.system(size: 13, weight: .semibold))
-                .tracking(2)
+                .tracking(1.4)
                 .foregroundStyle(theme.secondaryText)
                 .lineLimit(1)
 
@@ -250,8 +251,8 @@ struct ContentView: View {
                     .lineLimit(1)
             }
         }
-        .frame(height: 44)
-        .padding(.horizontal, 16)
+        .frame(height: 40)
+        .padding(.horizontal, 12)
         .foregroundStyle(theme.primaryText)
         .background(theme.toolbarBackground)
         .overlay(alignment: .bottom) {
@@ -452,8 +453,8 @@ struct ContentView: View {
                 .accessibilityLabel("Clear Filter")
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
         .foregroundStyle(theme.primaryText)
         .background(theme.panelBackground)
         .overlay(alignment: .bottom) {
@@ -877,13 +878,14 @@ struct ContentView: View {
     private var mediaWorkbench: some View {
         HSplitView {
             thumbnailPanel
-                .frame(minWidth: 190, idealWidth: 260, maxWidth: 330)
+                .frame(minWidth: 150, idealWidth: 190, maxWidth: 240)
 
             previewMainPanel
                 .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
+                .layoutPriority(1)
 
             pinnedPanel
-                .frame(minWidth: 160, idealWidth: 210, maxWidth: 270)
+                .frame(minWidth: 120, idealWidth: 150, maxWidth: 220)
         }
         .background(theme.canvasBackground)
     }
@@ -892,16 +894,17 @@ struct ContentView: View {
         VSplitView {
             HSplitView {
                 thumbnailPanel
-                    .frame(minWidth: 190, idealWidth: 260, maxWidth: 330)
+                    .frame(minWidth: 150, idealWidth: 190, maxWidth: 240)
 
                 clipsPane
-                    .frame(minWidth: 170, idealWidth: 220, maxWidth: 280)
+                    .frame(minWidth: 145, idealWidth: 180, maxWidth: 220)
 
                 playerPane
                     .frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
+                    .layoutPriority(1)
 
                 pinnedPanel
-                    .frame(minWidth: 150, idealWidth: 190, maxWidth: 250)
+                    .frame(minWidth: 120, idealWidth: 150, maxWidth: 210)
             }
             .frame(minHeight: 300, maxHeight: .infinity)
 
@@ -961,8 +964,8 @@ struct ContentView: View {
             .accessibilityLabel("Export Timeline")
         }
         .frame(height: topToolbarHeight)
-        .padding(.leading, 24)
-        .padding(.trailing, 24)
+        .padding(.leading, 16)
+        .padding(.trailing, 16)
         .background(theme.toolbarBackground)
         .overlay(alignment: .bottom) {
             Rectangle()
@@ -1031,7 +1034,7 @@ struct ContentView: View {
                     .padding()
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 10) {
+                    LazyVStack(spacing: 8) {
                         ForEach(editorClips) { clip in
                             Button {
                                 selectedTimelineClipID = nil
@@ -1062,7 +1065,7 @@ struct ContentView: View {
                             }
                         }
                     }
-                    .padding(12)
+                    .padding(8)
                 }
             }
         }
@@ -3509,7 +3512,7 @@ private struct EditorClipCard: View {
     let isSelected: Bool
 
     var body: some View {
-        VStack(spacing: 7) {
+        VStack(spacing: 5) {
             ZStack(alignment: .bottomTrailing) {
                 Group {
                     if let thumbnail {
@@ -3522,7 +3525,7 @@ private struct EditorClipCard: View {
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 }
-                .frame(height: 76)
+                .frame(height: 64)
                 .frame(maxWidth: .infinity)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .background {
@@ -3547,7 +3550,7 @@ private struct EditorClipCard: View {
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity)
         }
-        .padding(6)
+        .padding(5)
         .background(
             RoundedRectangle(cornerRadius: 8)
                 .fill(isSelected ? theme.panelRaised : Color.clear)
@@ -3759,7 +3762,7 @@ struct ThumbnailRow: View {
     var depth = 0
 
     var body: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 5) {
             ZStack(alignment: .bottomTrailing) {
                 Group {
                     if let thumbnail {
@@ -3772,7 +3775,7 @@ struct ThumbnailRow: View {
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 }
-                .frame(width: 112, height: 78)
+                .frame(width: 96, height: 66)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .background {
                     RoundedRectangle(cornerRadius: 8)
@@ -3804,11 +3807,11 @@ struct ThumbnailRow: View {
                 .lineLimit(2)
                 .truncationMode(.middle)
                 .multilineTextAlignment(.center)
-                .frame(width: 116)
+                .frame(width: 100)
         }
         .frame(maxWidth: .infinity)
-        .padding(.leading, CGFloat(depth) * 18)
-        .padding(.vertical, 6)
+        .padding(.leading, CGFloat(depth) * 14)
+        .padding(.vertical, 4)
     }
 }
 
