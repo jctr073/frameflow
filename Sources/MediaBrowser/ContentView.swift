@@ -2,25 +2,6 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-private enum EditorTheme {
-    static let windowBackground = Color(red: 0.015, green: 0.017, blue: 0.018)
-    static let canvasBackground = Color(red: 0.055, green: 0.060, blue: 0.064)
-    static let panelBackground = Color(red: 0.075, green: 0.080, blue: 0.084)
-    static let panelRaised = Color(red: 0.105, green: 0.110, blue: 0.115)
-    static let toolbarBackground = Color(red: 0.095, green: 0.100, blue: 0.105)
-    static let timelineBackground = Color(red: 0.060, green: 0.065, blue: 0.068)
-    static let trackBackground = Color(red: 0.070, green: 0.076, blue: 0.080)
-    static let trackAlternateBackground = Color(red: 0.080, green: 0.086, blue: 0.090)
-    static let thumbnailWell = Color.black.opacity(0.74)
-    static let clipBlue = Color(red: 0.135, green: 0.350, blue: 0.650)
-    static let clipBlueSelected = Color(red: 0.165, green: 0.445, blue: 0.805)
-    static let accent = Color(red: 1.000, green: 0.820, blue: 0.000)
-    static let primaryText = Color.white.opacity(0.92)
-    static let secondaryText = Color.white.opacity(0.56)
-    static let mutedText = Color.white.opacity(0.36)
-    static let hairline = Color.white.opacity(0.070)
-}
-
 private enum EditorDragPayload {
     static let editorClipPrefix = "editor-clip:"
     static let timelineClipPrefix = "timeline-clip:"
@@ -53,6 +34,7 @@ private enum EditorDragPayload {
 }
 
 struct ContentView: View {
+    @Environment(\.editorTheme) private var theme
     @StateObject private var library = MediaLibrary()
     @ObservedObject private var mainPanelState: MainPanelState
     @State private var isDropTargeted = false
@@ -100,29 +82,21 @@ struct ContentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if visibleEditorTabs.count > 1 {
-                mainPanelTabBar
-            }
+            mainPanelTabBar
 
-            HSplitView {
-                thumbnailPanel
-                    .frame(minWidth: 132, idealWidth: 170, maxWidth: 260)
-
-                mainPanel
-                    .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
-
-                if !pinnedItems.isEmpty {
-                    pinnedPanel
-                        .frame(minWidth: 170, idealWidth: 230, maxWidth: 280)
-                }
-            }
+            activeWorkbench
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             statusBar
         }
-        .padding(6)
-        .background(EditorTheme.windowBackground)
-        .tint(EditorTheme.accent)
-        .accentColor(EditorTheme.accent)
+        .padding(10)
+        .background {
+            RoundedRectangle(cornerRadius: 16)
+                .fill(theme.windowBackground)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .tint(theme.accent)
+        .accentColor(theme.accent)
         .preferredColorScheme(.dark)
         .overlay(dropOverlay)
         .quickTooltipOverlay()
@@ -134,6 +108,9 @@ struct ContentView: View {
             }
         }
         .onAppear {
+            activateAppWindow()
+        }
+        .onChange(of: theme.id) {
             activateAppWindow()
         }
         .onChange(of: library.selectedID) {
@@ -169,14 +146,26 @@ struct ContentView: View {
 
     private var thumbnailPanel: some View {
         VStack(spacing: 0) {
-            folderHeader
+            panelColumnHeader(title: "Folders", trailing: "\(library.items.count)") {
+                Button {
+                    chooseFolder()
+                } label: {
+                    Image(systemName: "folder")
+                        .font(.system(size: 13, weight: .medium))
+                        .frame(width: 24, height: 24)
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut("o", modifiers: .command)
+                .quickTooltip("Open Folder")
+                .accessibilityLabel("Open Folder")
+            }
             filterControl
             thumbnailBatchControl
 
             if visibleThumbnailEntries.isEmpty {
                 Text(thumbnailEmptyMessage)
                     .font(.callout)
-                    .foregroundStyle(EditorTheme.secondaryText)
+                    .foregroundStyle(theme.secondaryText)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .padding()
@@ -224,7 +213,7 @@ struct ContentView: View {
                     }
                     .listStyle(.sidebar)
                     .scrollContentBackground(.hidden)
-                    .background(EditorTheme.panelBackground)
+                    .background(theme.panelBackground)
                     .overlay(panelFocusOverlay(for: .thumbnail))
                     .onChange(of: thumbnailSelectionIDs) {
                         guard let thumbnailSelectionID = primaryThumbnailSelectionID else { return }
@@ -235,7 +224,41 @@ struct ContentView: View {
                 }
             }
         }
-        .background(EditorTheme.panelBackground)
+        .background(theme.panelBackground)
+    }
+
+    private func panelColumnHeader<Actions: View>(
+        title: String,
+        trailing: String? = nil,
+        @ViewBuilder actions: () -> Actions
+    ) -> some View {
+        HStack(spacing: 8) {
+            Text(title.uppercased())
+                .font(.system(size: 13, weight: .semibold))
+                .tracking(2)
+                .foregroundStyle(theme.secondaryText)
+                .lineLimit(1)
+
+            Spacer(minLength: 0)
+
+            actions()
+
+            if let trailing {
+                Text(trailing)
+                    .font(.system(size: 13, weight: .medium, design: .monospaced))
+                    .foregroundStyle(theme.mutedText)
+                    .lineLimit(1)
+            }
+        }
+        .frame(height: 44)
+        .padding(.horizontal, 16)
+        .foregroundStyle(theme.primaryText)
+        .background(theme.toolbarBackground)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(theme.hairline)
+                .frame(height: 1)
+        }
     }
 
     @ViewBuilder
@@ -245,7 +268,7 @@ struct ContentView: View {
             HStack(spacing: 8) {
                 Text("\(selectedItems.count) selected")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(EditorTheme.secondaryText)
+                    .foregroundStyle(theme.secondaryText)
                     .lineLimit(1)
 
                 Spacer(minLength: 0)
@@ -274,11 +297,11 @@ struct ContentView: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .foregroundStyle(EditorTheme.primaryText)
-            .background(EditorTheme.panelBackground)
+            .foregroundStyle(theme.primaryText)
+            .background(theme.panelBackground)
             .overlay(alignment: .bottom) {
                 Rectangle()
-                    .fill(EditorTheme.hairline)
+                    .fill(theme.hairline)
                     .frame(height: 1)
             }
         }
@@ -286,11 +309,7 @@ struct ContentView: View {
 
     private var pinnedPanel: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Text("Pinned")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
+            panelColumnHeader(title: "Pinned", trailing: "\(pinnedItems.count)") {
                 if isCopyingPinnedFiles {
                     ProgressView()
                         .controlSize(.small)
@@ -316,68 +335,64 @@ struct ContentView: View {
                         .frame(width: 24, height: 24)
                 }
                 .buttonStyle(.plain)
+                .disabled(pinnedItems.isEmpty)
                 .quickTooltip("Clear Pinned Files")
                 .accessibilityLabel("Clear Pinned Files")
-
-                Text("\(pinnedItems.count)")
-                    .font(.caption)
-                    .foregroundStyle(EditorTheme.secondaryText)
-                    .help("\(pinnedItems.count) Pinned Files")
-            }
-            .frame(height: topToolbarHeight)
-            .padding(.horizontal, 10)
-            .foregroundStyle(EditorTheme.primaryText)
-            .background(EditorTheme.toolbarBackground)
-            .overlay(alignment: .bottom) {
-                Rectangle()
-                    .fill(EditorTheme.hairline)
-                    .frame(height: 1)
             }
 
-            ScrollViewReader { proxy in
-                List(selection: $library.selectedID) {
-                    ForEach(pinnedItems) { pinnedItem in
-                        ThumbnailRow(
-                            item: pinnedItem.item,
-                            thumbnail: pinnedThumbnail(for: pinnedItem.item),
-                            isEdited: pinnedItem.isEdited
-                        )
-                            .listRowInsets(sidePanelRowInsets)
-                            .tag(pinnedItem.id)
-                            .accessibilityLabel(pinnedItem.item.fileName)
-                            .help(pinnedItem.item.url.path)
-                            .onTapGesture {
-                                activePanel = .pinned
-                                library.selectedID = pinnedItem.id
-                            }
-                            .contextMenu {
-                                Button("Remove from Pinned") {
-                                    unpin(pinnedItem.item)
+            if pinnedItems.isEmpty {
+                Text("No pinned files.")
+                    .font(.callout)
+                    .foregroundStyle(theme.secondaryText)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding()
+            } else {
+                ScrollViewReader { proxy in
+                    List(selection: $library.selectedID) {
+                        ForEach(pinnedItems) { pinnedItem in
+                            ThumbnailRow(
+                                item: pinnedItem.item,
+                                thumbnail: pinnedThumbnail(for: pinnedItem.item),
+                                isEdited: pinnedItem.isEdited
+                            )
+                                .listRowInsets(sidePanelRowInsets)
+                                .tag(pinnedItem.id)
+                                .accessibilityLabel(pinnedItem.item.fileName)
+                                .help(pinnedItem.item.url.path)
+                                .onTapGesture {
+                                    activePanel = .pinned
+                                    library.selectedID = pinnedItem.id
                                 }
-                            }
-                            .task(id: pinnedItem.id) {
-                                await loadPinnedThumbnailIfNeeded(for: pinnedItem.item)
-                            }
+                                .contextMenu {
+                                    Button("Remove from Pinned") {
+                                        unpin(pinnedItem.item)
+                                    }
+                                }
+                                .task(id: pinnedItem.id) {
+                                    await loadPinnedThumbnailIfNeeded(for: pinnedItem.item)
+                                }
+                        }
                     }
-                }
-                .listStyle(.sidebar)
-                .scrollContentBackground(.hidden)
-                .background(EditorTheme.panelBackground)
-                .overlay(panelFocusOverlay(for: .pinned))
-                .onChange(of: library.selectedID) {
-                    guard activePanel == .pinned,
-                          let selectedID = library.selectedID,
-                          pinnedItems.contains(where: { $0.id == selectedID })
-                    else {
-                        return
-                    }
-                    withAnimation(.snappy(duration: 0.16)) {
-                        proxy.scrollTo(selectedID, anchor: .center)
+                    .listStyle(.sidebar)
+                    .scrollContentBackground(.hidden)
+                    .background(theme.panelBackground)
+                    .overlay(panelFocusOverlay(for: .pinned))
+                    .onChange(of: library.selectedID) {
+                        guard activePanel == .pinned,
+                              let selectedID = library.selectedID,
+                              pinnedItems.contains(where: { $0.id == selectedID })
+                        else {
+                            return
+                        }
+                        withAnimation(.snappy(duration: 0.16)) {
+                            proxy.scrollTo(selectedID, anchor: .center)
+                        }
                     }
                 }
             }
         }
-        .background(EditorTheme.panelBackground)
+        .background(theme.panelBackground)
     }
 
     private var folderHeader: some View {
@@ -404,11 +419,11 @@ struct ContentView: View {
         .frame(height: topToolbarHeight)
         .padding(.leading, 10)
         .padding(.trailing, 8)
-        .foregroundStyle(EditorTheme.primaryText)
-        .background(EditorTheme.toolbarBackground)
+        .foregroundStyle(theme.primaryText)
+        .background(theme.toolbarBackground)
         .overlay(alignment: .bottom) {
             Rectangle()
-                .fill(EditorTheme.hairline)
+                .fill(theme.hairline)
                 .frame(height: 1)
         }
     }
@@ -417,7 +432,7 @@ struct ContentView: View {
         HStack(spacing: 6) {
             Image(systemName: "line.3.horizontal.decrease.circle")
                 .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(EditorTheme.secondaryText)
+                .foregroundStyle(theme.secondaryText)
 
             TextField("Filter files", text: $filterText)
                 .textFieldStyle(.plain)
@@ -430,7 +445,7 @@ struct ContentView: View {
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(EditorTheme.secondaryText)
+                        .foregroundStyle(theme.secondaryText)
                 }
                 .buttonStyle(.plain)
                 .quickTooltip("Clear Filter")
@@ -439,23 +454,23 @@ struct ContentView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
-        .foregroundStyle(EditorTheme.primaryText)
-        .background(EditorTheme.panelBackground)
+        .foregroundStyle(theme.primaryText)
+        .background(theme.panelBackground)
         .overlay(alignment: .bottom) {
             Rectangle()
-                .fill(EditorTheme.hairline)
+                .fill(theme.hairline)
                 .frame(height: 1)
         }
     }
 
     private var statusBar: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 12) {
             Button {
                 chooseFolder()
             } label: {
-                Image(systemName: "folder")
+                Image(systemName: "tray.and.arrow.up")
                     .font(.system(size: 13, weight: .medium))
-                    .frame(width: 22, height: 22)
+                    .frame(width: 24, height: 24)
             }
             .buttonStyle(.plain)
             .keyboardShortcut("o", modifiers: .command)
@@ -467,43 +482,51 @@ struct ContentView: View {
             } label: {
                 Image(systemName: "terminal")
                     .font(.system(size: 13, weight: .medium))
-                    .frame(width: 22, height: 22)
+                    .frame(width: 24, height: 24)
             }
             .buttonStyle(.plain)
             .disabled(library.folderURL == nil)
             .quickTooltip("Open Terminal Here")
             .accessibilityLabel("Open Terminal Here")
 
+            Circle()
+                .fill(theme.accent)
+                .frame(width: 10, height: 10)
+
             Text(statusPathText)
-                .font(.caption)
-                .foregroundStyle(EditorTheme.secondaryText)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(theme.secondaryText)
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .help(statusPathText)
 
+            Text(statusCountText)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(theme.secondaryText)
+                .lineLimit(1)
+                .help(statusCountText)
+
             if !selectedStatus.detailText.isEmpty {
+                Text("·")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(theme.mutedText)
+
                 Text(selectedStatus.detailText)
-                    .font(.caption)
-                    .foregroundStyle(EditorTheme.secondaryText)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(theme.secondaryText)
                     .lineLimit(1)
                     .help(selectedStatus.detailText)
             }
-
-            Text(statusCountText)
-                .font(.caption)
-                .foregroundStyle(EditorTheme.secondaryText)
-                .lineLimit(1)
-                .help(statusCountText)
         }
-        .frame(height: 28)
-        .padding(.leading, 8)
-        .padding(.trailing, 12)
-        .foregroundStyle(EditorTheme.primaryText)
-        .background(EditorTheme.toolbarBackground)
+        .frame(height: 36)
+        .padding(.leading, 18)
+        .padding(.trailing, 24)
+        .foregroundStyle(theme.primaryText)
+        .background(theme.toolbarBackground)
         .overlay(alignment: .top) {
             Rectangle()
-                .fill(EditorTheme.hairline)
+                .fill(theme.hairline)
                 .frame(height: 1)
         }
     }
@@ -513,6 +536,13 @@ struct ContentView: View {
             return "No folder open"
         }
 
+        let homePath = FileManager.default.homeDirectoryForCurrentUser.path
+        if folderURL.path == homePath {
+            return "~"
+        }
+        if folderURL.path.hasPrefix(homePath + "/") {
+            return "~" + String(folderURL.path.dropFirst(homePath.count))
+        }
         return folderURL.path
     }
 
@@ -834,152 +864,174 @@ struct ContentView: View {
         return parts.joined(separator: "  ")
     }
 
-    private var mainPanel: some View {
-        activeMainPanelContent
-        .background(EditorTheme.canvasBackground)
+    @ViewBuilder
+    private var activeWorkbench: some View {
+        switch mainPanelState.activeTab {
+        case .preview:
+            mediaWorkbench
+        case .videoComposer:
+            composerWorkbench
+        }
+    }
+
+    private var mediaWorkbench: some View {
+        HSplitView {
+            thumbnailPanel
+                .frame(minWidth: 190, idealWidth: 260, maxWidth: 330)
+
+            previewMainPanel
+                .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
+
+            pinnedPanel
+                .frame(minWidth: 160, idealWidth: 210, maxWidth: 270)
+        }
+        .background(theme.canvasBackground)
+    }
+
+    private var composerWorkbench: some View {
+        VSplitView {
+            HSplitView {
+                thumbnailPanel
+                    .frame(minWidth: 190, idealWidth: 260, maxWidth: 330)
+
+                clipsPane
+                    .frame(minWidth: 170, idealWidth: 220, maxWidth: 280)
+
+                playerPane
+                    .frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
+
+                pinnedPanel
+                    .frame(minWidth: 150, idealWidth: 190, maxWidth: 250)
+            }
+            .frame(minHeight: 300, maxHeight: .infinity)
+
+            timelinePane
+                .frame(minHeight: 120, idealHeight: 150, maxHeight: 190)
+        }
+        .background(theme.canvasBackground)
     }
 
     private var mainPanelTabBar: some View {
-        ZStack {
-            HStack(spacing: 2) {
+        HStack(spacing: 18) {
+            HStack(spacing: 0) {
                 ForEach(visibleEditorTabs) { tab in
                     let isActive = mainPanelState.activeTab == tab
                     Button {
                         mainPanelState.activate(tab)
                     } label: {
                         Text(tab.editorTabTitle)
-                            .font(.caption.weight(.semibold))
+                            .font(.system(size: 14, weight: .semibold))
                             .lineLimit(1)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .frame(minWidth: 82)
-                            .background(
-                                RoundedRectangle(cornerRadius: 7)
-                                    .fill(isActive ? EditorTheme.panelRaised : Color.clear)
-                            )
+                            .frame(width: 112, height: topToolbarHeight)
+                            .background(isActive ? theme.panelRaised : Color.clear)
+                            .overlay(alignment: .top) {
+                                if isActive {
+                                    Rectangle()
+                                        .fill(theme.accent)
+                                        .frame(height: 3)
+                                }
+                            }
                     }
                     .buttonStyle(.plain)
-                    .foregroundStyle(isActive ? EditorTheme.accent : EditorTheme.secondaryText)
+                    .foregroundStyle(isActive ? theme.primaryText : theme.secondaryText)
                     .accessibilityLabel(tab.title)
                 }
             }
-            .padding(2)
-            .background(EditorTheme.panelBackground, in: RoundedRectangle(cornerRadius: 9))
 
-            HStack {
-                Spacer(minLength: 0)
+            Spacer(minLength: 0)
 
-                Button {
-                    exportTimeline()
-                } label: {
-                    if isExportingTimeline {
-                        ProgressView()
-                            .controlSize(.small)
-                            .frame(width: 68, height: 28)
-                    } else {
-                        Label("Export", systemImage: "square.and.arrow.up")
-                            .font(.caption.weight(.bold))
-                            .labelStyle(.titleAndIcon)
-                            .frame(width: 78, height: 28)
-                    }
+            Button {
+                exportTimeline()
+            } label: {
+                if isExportingTimeline {
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(width: 86, height: 38)
+                } else {
+                    Text("Export")
+                        .font(.system(size: 14, weight: .bold))
+                        .frame(width: 86, height: 38)
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(Color.black)
-                .background(EditorTheme.accent, in: RoundedRectangle(cornerRadius: 7))
-                .disabled(timelineClips.isEmpty || isExportingTimeline)
-                .quickTooltip("Export Timeline")
-                .accessibilityLabel("Export Timeline")
             }
+            .buttonStyle(.plain)
+            .foregroundStyle(theme.accentText)
+            .background(theme.accent, in: RoundedRectangle(cornerRadius: 7))
+            .disabled(timelineClips.isEmpty || isExportingTimeline)
+            .quickTooltip("Export Timeline")
+            .accessibilityLabel("Export Timeline")
         }
-        .frame(height: 44)
-        .padding(.horizontal, 10)
-        .background(EditorTheme.windowBackground)
+        .frame(height: topToolbarHeight)
+        .padding(.leading, 24)
+        .padding(.trailing, 24)
+        .background(theme.toolbarBackground)
         .overlay(alignment: .bottom) {
             Rectangle()
-                .fill(EditorTheme.hairline)
+                .fill(theme.hairline)
                 .frame(height: 1)
-        }
-    }
-
-    @ViewBuilder
-    private var activeMainPanelContent: some View {
-        switch mainPanelState.activeTab {
-        case .preview:
-            previewMainPanel
-        case .videoComposer:
-            videoComposerPanel
         }
     }
 
     private var previewMainPanel: some View {
         VStack(spacing: 0) {
+            mediaPreviewHeader
             editingToolbar
             previewPanel
         }
     }
 
-    private var videoComposerPanel: some View {
-        VSplitView {
-            HSplitView {
-                clipsPane
-                    .frame(minWidth: 190, idealWidth: 230, maxWidth: 320)
+    private var mediaPreviewHeader: some View {
+        HStack(spacing: 10) {
+            Text(selectedItem?.fileName ?? "No media selected")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(theme.primaryText)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .help(selectedItem?.url.path ?? "No media selected")
 
-                playerPane
-                    .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
+            if !selectedStatus.detailText.isEmpty {
+                Text(selectedStatus.detailText)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(theme.secondaryText)
+                    .lineLimit(1)
             }
-            .frame(minHeight: 280, maxHeight: .infinity)
-
-            timelinePane
-                .frame(minHeight: 88, idealHeight: 116, maxHeight: 150)
         }
-        .background(EditorTheme.canvasBackground)
+        .frame(height: 44)
+        .padding(.horizontal, 16)
+        .background(theme.toolbarBackground)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(theme.hairline)
+                .frame(height: 1)
+        }
     }
 
     private var clipsPane: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Text("Project Media")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(EditorTheme.accent)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
+            panelColumnHeader(title: "Project") {
                 Button {
                     importEditorClips()
                 } label: {
-                    Label("Import", systemImage: "plus")
-                        .font(.caption.weight(.semibold))
+                    Label("Add", systemImage: "plus")
+                        .font(.system(size: 12, weight: .bold))
                         .labelStyle(.titleAndIcon)
-                        .padding(.horizontal, 9)
-                        .frame(height: 28)
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(EditorTheme.accent)
-                .background(EditorTheme.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
+                .foregroundStyle(theme.accent)
                 .quickTooltip("Import Clips")
                 .accessibilityLabel("Import Clips")
-            }
-            .frame(height: topToolbarHeight)
-            .padding(.horizontal, 10)
-            .background(EditorTheme.toolbarBackground)
-            .overlay(alignment: .bottom) {
-                Rectangle()
-                    .fill(EditorTheme.hairline)
-                    .frame(height: 1)
             }
 
             if editorClips.isEmpty {
                 Text("Import media to start building a timeline.")
                     .font(.callout)
-                    .foregroundStyle(EditorTheme.secondaryText)
+                    .foregroundStyle(theme.secondaryText)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .padding()
             } else {
                 ScrollView {
-                    LazyVGrid(
-                        columns: [GridItem(.adaptive(minimum: 94, maximum: 132), spacing: 10)],
-                        spacing: 12
-                    ) {
+                    LazyVStack(spacing: 10) {
                         ForEach(editorClips) { clip in
                             Button {
                                 selectedTimelineClipID = nil
@@ -1010,11 +1062,11 @@ struct ContentView: View {
                             }
                         }
                     }
-                    .padding(10)
+                    .padding(12)
                 }
             }
         }
-        .background(EditorTheme.panelBackground)
+        .background(theme.panelBackground)
     }
 
     private var playerPane: some View {
@@ -1022,7 +1074,7 @@ struct ContentView: View {
             HStack(spacing: 10) {
                 Text(playerPaneTitle)
                     .font(.caption.weight(.medium))
-                    .foregroundStyle(EditorTheme.mutedText)
+                    .foregroundStyle(theme.mutedText)
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -1031,7 +1083,7 @@ struct ContentView: View {
                 if let durationText = playerPaneDurationText {
                     Text(durationText)
                         .font(.caption.monospacedDigit())
-                        .foregroundStyle(EditorTheme.secondaryText)
+                        .foregroundStyle(theme.secondaryText)
                         .lineLimit(1)
                 }
 
@@ -1039,17 +1091,17 @@ struct ContentView: View {
             }
             .frame(height: topToolbarHeight)
             .padding(.horizontal, 12)
-            .background(EditorTheme.toolbarBackground)
+            .background(theme.toolbarBackground)
             .overlay(alignment: .bottom) {
                 Rectangle()
-                    .fill(EditorTheme.hairline)
+                    .fill(theme.hairline)
                     .frame(height: 1)
             }
 
             playerEditingToolbar
 
             ZStack {
-                EditorTheme.windowBackground
+                theme.windowBackground
 
                 if isShowingTimelinePlayback && !isPlayerCropToolActive {
                     TimelineSequenceVideoView(
@@ -1072,11 +1124,11 @@ struct ContentView: View {
                 } else {
                     Text("No clips added.")
                         .font(.title3)
-                        .foregroundStyle(EditorTheme.secondaryText)
+                        .foregroundStyle(theme.secondaryText)
                 }
             }
         }
-        .background(EditorTheme.windowBackground)
+        .background(theme.windowBackground)
     }
 
     @ViewBuilder
@@ -1093,7 +1145,7 @@ struct ContentView: View {
                         .frame(width: 22, height: 22)
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(selectedTimelineClip?.adjustments.isMuted == true ? EditorTheme.accent : EditorTheme.primaryText)
+                .foregroundStyle(selectedTimelineClip?.adjustments.isMuted == true ? theme.accent : theme.primaryText)
                 .quickTooltip(selectedTimelineClip?.adjustments.isMuted == true ? "Unmute Clip" : "Mute Clip")
                 .accessibilityLabel(selectedTimelineClip?.adjustments.isMuted == true ? "Unmute Clip" : "Mute Clip")
 
@@ -1108,12 +1160,12 @@ struct ContentView: View {
 
                 Text(String(format: "%.2f", selectedTimelineClip?.adjustments.volume ?? 1))
                     .font(.caption.monospacedDigit())
-                    .foregroundStyle(EditorTheme.secondaryText)
+                    .foregroundStyle(theme.secondaryText)
                     .frame(width: 34, alignment: .trailing)
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
-            .background(EditorTheme.panelBackground, in: RoundedRectangle(cornerRadius: 7))
+            .background(theme.panelBackground, in: RoundedRectangle(cornerRadius: 7))
         }
     }
 
@@ -1150,7 +1202,7 @@ struct ContentView: View {
             }
             .buttonStyle(.plain)
             .disabled(activeEditorClip == nil)
-            .foregroundStyle(isPlayerCropToolActive ? EditorTheme.accent : EditorTheme.primaryText)
+            .foregroundStyle(isPlayerCropToolActive ? theme.accent : theme.primaryText)
             .quickTooltip("Crop Tool")
             .accessibilityLabel("Crop Tool")
 
@@ -1199,11 +1251,11 @@ struct ContentView: View {
         }
         .frame(height: 34)
         .padding(.horizontal, 10)
-        .foregroundStyle(EditorTheme.primaryText)
-        .background(EditorTheme.toolbarBackground)
+        .foregroundStyle(theme.primaryText)
+        .background(theme.toolbarBackground)
         .overlay(alignment: .bottom) {
             Rectangle()
-                .fill(EditorTheme.hairline)
+                .fill(theme.hairline)
                 .frame(height: 1)
         }
     }
@@ -1225,13 +1277,13 @@ struct ContentView: View {
                     }
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(EditorTheme.primaryText)
+                .foregroundStyle(theme.primaryText)
                 .disabled(timelineClips.isEmpty || isExportingTimeline)
                 .quickTooltip("Export Timeline")
                 .accessibilityLabel("Export Timeline")
 
                 Rectangle()
-                    .fill(EditorTheme.hairline)
+                    .fill(theme.hairline)
                     .frame(width: 1, height: 16)
 
                 Button {
@@ -1242,7 +1294,7 @@ struct ContentView: View {
                         .frame(width: 22, height: 22)
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(EditorTheme.primaryText)
+                .foregroundStyle(theme.primaryText)
                 .disabled(!selectedTimelineClipHasTrim)
                 .quickTooltip("Reset Timeline Trim")
                 .accessibilityLabel("Reset Timeline Trim")
@@ -1255,7 +1307,7 @@ struct ContentView: View {
                         .frame(width: 22, height: 22)
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(EditorTheme.primaryText)
+                .foregroundStyle(theme.primaryText)
                 .disabled(!canSplitSelectedTimelineClip)
                 .quickTooltip("Split Clip")
                 .accessibilityLabel("Split Clip")
@@ -1268,7 +1320,7 @@ struct ContentView: View {
                         .frame(width: 22, height: 22)
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(EditorTheme.primaryText)
+                .foregroundStyle(theme.primaryText)
                 .disabled(selectedTimelineClipID == nil)
                 .quickTooltip("Delete Timeline Clip")
                 .accessibilityLabel("Delete Timeline Clip")
@@ -1277,7 +1329,7 @@ struct ContentView: View {
 
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(EditorTheme.secondaryText)
+                    .foregroundStyle(theme.secondaryText)
 
                 Slider(value: $timelineZoom, in: 0.5...3.0)
                     .controlSize(.small)
@@ -1287,10 +1339,10 @@ struct ContentView: View {
             }
             .frame(height: 28)
             .padding(.horizontal, 8)
-            .background(EditorTheme.toolbarBackground)
+            .background(theme.toolbarBackground)
             .overlay(alignment: .bottom) {
                 Rectangle()
-                    .fill(EditorTheme.hairline)
+                    .fill(theme.hairline)
                     .frame(height: 1)
             }
 
@@ -1300,9 +1352,9 @@ struct ContentView: View {
             VStack(spacing: 0) {
                 timelineTrackRow(title: "Video", systemImage: "film", clips: timelineClips, acceptsDrops: true)
             }
-            .frame(height: 62)
+            .frame(height: 52)
         }
-        .background(EditorTheme.timelineBackground)
+        .background(theme.timelineBackground)
         .onDrop(
             of: [UTType.plainText.identifier],
             isTargeted: $isTimelineDropTargeted,
@@ -1323,22 +1375,22 @@ struct ContentView: View {
                     let seconds = TimeInterval(marker) * interval
                     VStack(alignment: .leading, spacing: 2) {
                         Rectangle()
-                            .fill(EditorTheme.secondaryText.opacity(0.55))
+                            .fill(theme.secondaryText.opacity(0.55))
                             .frame(width: 1, height: 5)
 
                         Text(MediaTrim.format(seconds))
                             .font(.system(size: 8, weight: .medium, design: .monospaced))
-                            .foregroundStyle(EditorTheme.mutedText)
+                            .foregroundStyle(theme.mutedText)
                     }
                     .offset(x: labelGutter + CGFloat(seconds) * timelinePixelsPerSecond)
                 }
             }
             .frame(width: contentWidth, height: geometry.size.height, alignment: .topLeading)
         }
-        .background(EditorTheme.timelineBackground)
+        .background(theme.timelineBackground)
         .overlay(alignment: .bottom) {
             Rectangle()
-                .fill(EditorTheme.hairline)
+                .fill(theme.hairline)
                 .frame(height: 1)
         }
     }
@@ -1358,19 +1410,19 @@ struct ContentView: View {
                     .font(.caption.weight(.semibold))
                     .lineLimit(1)
             }
-            .foregroundStyle(EditorTheme.secondaryText)
+            .foregroundStyle(theme.secondaryText)
             .frame(width: 54, alignment: .leading)
             .frame(maxHeight: .infinity)
             .padding(.horizontal, 5)
-            .background(EditorTheme.trackAlternateBackground)
+            .background(theme.trackAlternateBackground)
             .overlay(alignment: .trailing) {
                 Rectangle()
-                    .fill(EditorTheme.hairline)
+                    .fill(theme.hairline)
                     .frame(width: 1)
             }
 
             ScrollView(.horizontal) {
-                HStack(spacing: 6) {
+                HStack(spacing: 0) {
                     ForEach(clips) { clip in
                         let sourceClip = editorClip(for: clip)
                         let duration = sourceClip?.status?.duration ?? 0
@@ -1389,7 +1441,7 @@ struct ContentView: View {
                                 updateTimelineClipTrim(clip, trim: nextTrim)
                             }
                         )
-                        .frame(width: timelineClipWidth(for: clip), height: 42)
+                        .frame(width: timelineClipWidth(for: clip), height: 36)
                         .contentShape(Rectangle())
                         .opacity(draggingTimelineClipID == clip.id ? 0.72 : 1)
                         .onTapGesture {
@@ -1419,25 +1471,24 @@ struct ContentView: View {
 
                     Spacer(minLength: 0)
                 }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
+                .padding(.vertical, 4)
                 .frame(maxHeight: .infinity, alignment: .leading)
             }
             .background {
                 if acceptsDrops && isTimelineDropTargeted {
                     RoundedRectangle(cornerRadius: 6)
-                        .fill(EditorTheme.accent.opacity(0.10))
+                        .fill(theme.accent.opacity(0.10))
                         .padding(4)
                 }
             }
             .overlay {
                 if acceptsDrops && isTimelineDropTargeted {
                     RoundedRectangle(cornerRadius: 6)
-                        .stroke(EditorTheme.accent.opacity(0.65), style: StrokeStyle(lineWidth: 1.5, dash: [6, 4]))
+                        .stroke(theme.accent.opacity(0.65), style: StrokeStyle(lineWidth: 1.5, dash: [6, 4]))
                         .padding(4)
                 }
             }
-            .background(EditorTheme.trackBackground)
+            .background(theme.trackBackground)
         }
     }
 
@@ -1473,7 +1524,7 @@ struct ContentView: View {
             }
             .buttonStyle(.plain)
             .disabled(selectedItem == nil)
-            .foregroundStyle(isCropToolActive ? EditorTheme.accent : EditorTheme.primaryText)
+            .foregroundStyle(isCropToolActive ? theme.accent : theme.primaryText)
             .quickTooltip("Crop Tool")
             .accessibilityLabel("Crop Tool")
 
@@ -1519,7 +1570,7 @@ struct ContentView: View {
             .accessibilityLabel("Reset Crop")
 
             Rectangle()
-                .fill(EditorTheme.hairline)
+                .fill(theme.hairline)
                 .frame(width: 1, height: 18)
                 .padding(.horizontal, 3)
 
@@ -1536,7 +1587,7 @@ struct ContentView: View {
             }
             .buttonStyle(.plain)
             .disabled(!selectedCanTrim)
-            .foregroundStyle(isTrimToolActive ? EditorTheme.accent : EditorTheme.primaryText)
+            .foregroundStyle(isTrimToolActive ? theme.accent : theme.primaryText)
             .quickTooltip("Trim Tool")
             .accessibilityLabel("Trim Tool")
 
@@ -1574,7 +1625,7 @@ struct ContentView: View {
             .accessibilityLabel("Undo Edits")
 
             Rectangle()
-                .fill(EditorTheme.hairline)
+                .fill(theme.hairline)
                 .frame(width: 1, height: 18)
                 .padding(.horizontal, 3)
 
@@ -1609,7 +1660,7 @@ struct ContentView: View {
             if !selectedCrop.isFullFrame || !selectedTrim.isFullLength(for: selectedStatus.duration) {
                 Text(editSummaryLabel)
                     .font(.caption)
-                    .foregroundStyle(EditorTheme.secondaryText)
+                    .foregroundStyle(theme.secondaryText)
                     .lineLimit(1)
                     .padding(.leading, 4)
                     .help("Current Edit Summary")
@@ -1619,18 +1670,18 @@ struct ContentView: View {
         }
         .frame(height: topToolbarHeight)
         .padding(.horizontal, 10)
-        .foregroundStyle(EditorTheme.primaryText)
-        .background(EditorTheme.toolbarBackground)
+        .foregroundStyle(theme.primaryText)
+        .background(theme.toolbarBackground)
         .overlay(alignment: .bottom) {
             Rectangle()
-                .fill(EditorTheme.hairline)
+                .fill(theme.hairline)
                 .frame(height: 1)
         }
     }
 
     private var previewPanel: some View {
         ZStack {
-            EditorTheme.canvasBackground
+            theme.canvasBackground
 
             if let item = selectedItem {
                 PreviewPane(
@@ -1647,7 +1698,7 @@ struct ContentView: View {
             } else {
                 Text(library.stateMessage)
                     .font(.title3)
-                    .foregroundStyle(EditorTheme.secondaryText)
+                    .foregroundStyle(theme.secondaryText)
                     .multilineTextAlignment(.center)
                     .padding()
             }
@@ -1666,7 +1717,7 @@ struct ContentView: View {
     private var dropOverlay: some View {
         if isDropTargeted {
             RoundedRectangle(cornerRadius: 10)
-                .stroke(EditorTheme.accent, lineWidth: 3)
+                .stroke(theme.accent, lineWidth: 3)
                 .padding(10)
                 .allowsHitTesting(false)
         }
@@ -3018,7 +3069,7 @@ struct ContentView: View {
     private func panelFocusOverlay(for panel: SidePanel) -> some View {
         if activePanel == panel {
             RoundedRectangle(cornerRadius: 5)
-                .stroke(EditorTheme.accent.opacity(0.55), lineWidth: 1)
+                .stroke(theme.accent.opacity(0.55), lineWidth: 1)
                 .padding(3)
                 .allowsHitTesting(false)
         }
@@ -3034,18 +3085,14 @@ struct ContentView: View {
     }
 
     private func activateAppWindow() {
+        let activeTheme = theme
         NSApplication.shared.setActivationPolicy(.regular)
         DispatchQueue.main.async {
             if let window = NSApplication.shared.windows.first {
                 window.title = "MediaBrowser"
                 window.titleVisibility = .hidden
                 window.appearance = NSAppearance(named: .darkAqua)
-                window.backgroundColor = NSColor(
-                    red: 0.015,
-                    green: 0.017,
-                    blue: 0.018,
-                    alpha: 1
-                )
+                window.backgroundColor = activeTheme.windowBackgroundNSColor
                 window.titlebarAppearsTransparent = true
                 if let titlebar = window.standardWindowButton(.closeButton)?.superview {
                     let titleLabelTag = 901_202
@@ -3093,7 +3140,7 @@ private extension MainPanelTab {
         case .preview:
             return "Media"
         case .videoComposer:
-            return "Video Composer"
+            return "Composer"
         }
     }
 }
@@ -3322,6 +3369,7 @@ private struct TrimControls: View {
 }
 
 private struct TrimRangeSlider: View {
+    @Environment(\.editorTheme) private var theme
     @Binding var trim: MediaTrim
     let duration: TimeInterval
 
@@ -3343,19 +3391,19 @@ private struct TrimRangeSlider: View {
                     .position(x: size.width / 2, y: size.height / 2)
 
                 Capsule()
-                    .fill(EditorTheme.accent.opacity(0.82))
+                    .fill(theme.accent.opacity(0.82))
                     .frame(width: max(endX - startX, 2), height: 4)
                     .position(x: (startX + endX) / 2, y: size.height / 2)
 
                 Circle()
-                    .fill(activeHandle == .start ? EditorTheme.accent : EditorTheme.panelRaised)
-                    .stroke(EditorTheme.accent, lineWidth: 1.5)
+                    .fill(activeHandle == .start ? theme.accent : theme.panelRaised)
+                    .stroke(theme.accent, lineWidth: 1.5)
                     .frame(width: handleSize, height: handleSize)
                     .position(x: startX, y: size.height / 2)
 
                 Circle()
-                    .fill(activeHandle == .end ? EditorTheme.accent : EditorTheme.panelRaised)
-                    .stroke(EditorTheme.accent, lineWidth: 1.5)
+                    .fill(activeHandle == .end ? theme.accent : theme.panelRaised)
+                    .stroke(theme.accent, lineWidth: 1.5)
                     .frame(width: handleSize, height: handleSize)
                     .position(x: endX, y: size.height / 2)
             }
@@ -3455,6 +3503,7 @@ private extension String {
 }
 
 private struct EditorClipCard: View {
+    @Environment(\.editorTheme) private var theme
     let clip: EditorClip
     let thumbnail: NSImage?
     let isSelected: Bool
@@ -3478,7 +3527,7 @@ private struct EditorClipCard: View {
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .background {
                     RoundedRectangle(cornerRadius: 8)
-                        .fill(EditorTheme.thumbnailWell)
+                        .fill(theme.thumbnailWell)
                 }
 
                 Text(durationBadge)
@@ -3492,7 +3541,7 @@ private struct EditorClipCard: View {
 
             Text(clip.item.fileName)
                 .font(.caption2)
-                .foregroundStyle(EditorTheme.secondaryText)
+                .foregroundStyle(theme.secondaryText)
                 .lineLimit(2)
                 .truncationMode(.middle)
                 .multilineTextAlignment(.center)
@@ -3501,11 +3550,11 @@ private struct EditorClipCard: View {
         .padding(6)
         .background(
             RoundedRectangle(cornerRadius: 8)
-                .fill(isSelected ? EditorTheme.panelRaised : Color.clear)
+                .fill(isSelected ? theme.panelRaised : Color.clear)
         )
         .overlay {
             RoundedRectangle(cornerRadius: 8)
-                .stroke(isSelected ? EditorTheme.accent : EditorTheme.hairline, lineWidth: isSelected ? 2 : 1)
+                .stroke(isSelected ? theme.accent : theme.hairline, lineWidth: isSelected ? 2 : 1)
         }
     }
 
@@ -3543,6 +3592,7 @@ private struct TimelineClipReorderDropDelegate: DropDelegate {
 }
 
 private struct TimelineClipBlock: View {
+    @Environment(\.editorTheme) private var theme
     let sourceClip: EditorClip?
     let thumbnail: NSImage?
     let isSelected: Bool
@@ -3560,11 +3610,11 @@ private struct TimelineClipBlock: View {
         GeometryReader { geometry in
             let width = geometry.size.width
             let showsThumbnail = width >= 26
-            let showsDetails = width >= 74
-            let horizontalPadding: CGFloat = width < 42 ? 3 : 7
-            let thumbnailWidth = min(44, max(18, width * 0.45))
+            let showsDetails = width >= 68
+            let horizontalPadding: CGFloat = width < 42 ? 2 : 5
+            let thumbnailWidth = min(38, max(16, width * 0.40))
 
-            HStack(spacing: showsDetails ? 7 : 0) {
+            HStack(spacing: showsDetails ? 5 : 0) {
                 if showsThumbnail {
                     Group {
                         if let thumbnail {
@@ -3572,15 +3622,15 @@ private struct TimelineClipBlock: View {
                                 .resizable()
                                 .aspectRatio(contentMode: .fill)
                         } else {
-                            EditorTheme.thumbnailWell
+                            theme.thumbnailWell
                         }
                     }
                     .frame(width: thumbnailWidth)
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                    .clipped()
                 }
 
                 if showsDetails {
-                    VStack(alignment: .leading, spacing: 3) {
+                    VStack(alignment: .leading, spacing: 2) {
                         Text(sourceClip?.item.fileName ?? "Missing Clip")
                             .font(.caption2.weight(.semibold))
                             .foregroundStyle(.white)
@@ -3597,16 +3647,16 @@ private struct TimelineClipBlock: View {
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, horizontalPadding)
-            .padding(.vertical, 6)
+            .padding(.vertical, 4)
             .frame(width: geometry.size.width, height: geometry.size.height)
             .clipped()
             .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(isSelected ? EditorTheme.clipBlueSelected : EditorTheme.clipBlue)
+                Rectangle()
+                    .fill(isSelected ? theme.clipBlueSelected : theme.clipBlue)
             )
             .overlay {
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(isSelected ? EditorTheme.accent : Color.white.opacity(0.16), lineWidth: isSelected ? 2 : 1)
+                Rectangle()
+                    .stroke(isSelected ? theme.accent : Color.white.opacity(0.16), lineWidth: isSelected ? 2 : 1)
             }
             .overlay(alignment: .leading) {
                 if let playheadProgress {
@@ -3623,7 +3673,7 @@ private struct TimelineClipBlock: View {
                         .font(.system(size: 9, weight: .bold))
                         .foregroundStyle(Color.black)
                         .frame(width: 16, height: 16)
-                        .background(EditorTheme.accent, in: Circle())
+                        .background(theme.accent, in: Circle())
                         .padding(3)
                         .quickTooltip("Cropped")
                         .accessibilityLabel("Cropped")
@@ -3640,7 +3690,7 @@ private struct TimelineClipBlock: View {
                 }
             }
         }
-        .frame(height: 46)
+        .frame(height: 36)
     }
 
     private var detailText: String {
@@ -3664,10 +3714,10 @@ private struct TimelineClipBlock: View {
     }
 
     private func trimHandle(_ handle: TimelineTrimHandle) -> some View {
-        RoundedRectangle(cornerRadius: 2)
+        Rectangle()
             .fill(activeTrimHandle == handle ? Color.white : Color.white.opacity(0.78))
-            .frame(width: 8, height: 36)
-            .padding(.horizontal, 2)
+            .frame(width: 7, height: 32)
+            .padding(.horizontal, 1)
             .shadow(color: .black.opacity(0.22), radius: 2)
             .gesture(trimGesture(handle))
             .quickTooltip(handle == .leading ? "Trim Start" : "Trim End")
@@ -3702,6 +3752,7 @@ private struct TimelineClipBlock: View {
 }
 
 struct ThumbnailRow: View {
+    @Environment(\.editorTheme) private var theme
     let item: MediaItem
     let thumbnail: NSImage?
     var isEdited = false
@@ -3725,7 +3776,7 @@ struct ThumbnailRow: View {
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .background {
                     RoundedRectangle(cornerRadius: 8)
-                        .fill(EditorTheme.thumbnailWell)
+                        .fill(theme.thumbnailWell)
                 }
 
                 Text(item.kind.label)
@@ -3742,14 +3793,14 @@ struct ThumbnailRow: View {
                         .font(.system(size: 10, weight: .bold))
                         .foregroundStyle(.white)
                         .frame(width: 18, height: 18)
-                        .background(EditorTheme.accent, in: Circle())
+                        .background(theme.accent, in: Circle())
                         .padding(3)
                 }
             }
 
             Text(item.fileName)
                 .font(.caption)
-                .foregroundStyle(EditorTheme.secondaryText)
+                .foregroundStyle(theme.secondaryText)
                 .lineLimit(2)
                 .truncationMode(.middle)
                 .multilineTextAlignment(.center)
@@ -3762,23 +3813,24 @@ struct ThumbnailRow: View {
 }
 
 struct FolderRow: View {
+    @Environment(\.editorTheme) private var theme
     let entry: FolderPanelEntry
 
     var body: some View {
         HStack(spacing: 7) {
             Image(systemName: entry.isExpanded ? "chevron.down" : "chevron.right")
                 .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(EditorTheme.mutedText)
+                .foregroundStyle(theme.mutedText)
                 .frame(width: 12)
 
             Image(systemName: entry.isExpanded ? "folder.fill" : "folder")
                 .font(.system(size: 20, weight: .medium))
-                .foregroundStyle(EditorTheme.secondaryText)
+                .foregroundStyle(theme.secondaryText)
                 .frame(width: 24)
 
             Text(entry.folder.name)
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(EditorTheme.primaryText)
+                .foregroundStyle(theme.primaryText)
                 .lineLimit(1)
                 .truncationMode(.middle)
 
@@ -3796,6 +3848,7 @@ struct FolderRow: View {
 }
 
 struct PreviewPane: View {
+    @Environment(\.editorTheme) private var theme
     let item: MediaItem
     let zoomMultiplier: Double
     let isCropToolActive: Bool
@@ -3813,7 +3866,7 @@ struct PreviewPane: View {
             if failedToLoad {
                 Text("This file could not be loaded.")
                     .font(.title3)
-                    .foregroundStyle(EditorTheme.secondaryText)
+                    .foregroundStyle(theme.secondaryText)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let naturalSize, naturalSize.width > 0, naturalSize.height > 0 {
                 fittedMedia(in: geometry.size, naturalSize: naturalSize)
@@ -3904,6 +3957,7 @@ struct PreviewPane: View {
 }
 
 private struct CropOverlay: View {
+    @Environment(\.editorTheme) private var theme
     @Binding var crop: NormalizedCrop
     let isEditable: Bool
     let onApply: () -> Void
@@ -3928,7 +3982,7 @@ private struct CropOverlay: View {
                     .allowsHitTesting(isEditable)
 
                 Rectangle()
-                    .strokeBorder(EditorTheme.accent, style: StrokeStyle(lineWidth: 2, dash: [7, 5]))
+                    .strokeBorder(theme.accent, style: StrokeStyle(lineWidth: 2, dash: [7, 5]))
                     .frame(width: cropRect.width, height: cropRect.height)
                     .position(x: cropRect.midX, y: cropRect.midY)
                     .allowsHitTesting(false)
@@ -3936,7 +3990,7 @@ private struct CropOverlay: View {
                 if isEditable {
                     ForEach(CropHandle.allCases) { handle in
                         Circle()
-                            .fill(EditorTheme.accent)
+                            .fill(theme.accent)
                             .stroke(Color.white, lineWidth: 1.5)
                             .frame(width: 12, height: 12)
                             .position(handle.position(in: cropRect))
@@ -3955,7 +4009,7 @@ private struct CropOverlay: View {
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(.white)
-                        .background(EditorTheme.accent, in: Capsule())
+                        .background(theme.accent, in: Capsule())
                         .position(
                             x: min(max(cropRect.maxX - 38, 42), geometry.size.width - 42),
                             y: min(max(cropRect.minY + 22, 22), geometry.size.height - 22)
