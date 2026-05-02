@@ -65,6 +65,7 @@ struct ContentView: View {
     @State private var activePanel: SidePanel = .thumbnail
     @State private var showThumbnailPanel: Bool = true
     @State private var showPinnedPanel: Bool = true
+    private let collapsedPanelWidth: CGFloat = 44
     @State private var thumbnailSelectionIDs: Set<URL> = []
     @State private var thumbnailSelectionAnchorID: URL?
     @State private var isCopyingPinnedFiles = false
@@ -91,7 +92,7 @@ struct ContentView: View {
     private let timelineVideoTrackHeight: CGFloat = 84
     private let timelineTrackHeaderWidth: CGFloat = 64
     private let timelineRulerLabelTrailingPadding: CGFloat = 72
-    private let timelineZoomRange = 0.5...12.0
+    private let timelineZoomRange = 0.05...12.0
     private let timelinePlayheadColor = Color(red: 0.96, green: 0.30, blue: 0.10)
     private let timelineSelectionOutlineColor = Color(red: 0.86, green: 0.42, blue: 0.08)
     private let timelinePlayheadHandleSize = CGSize(width: 14, height: 16)
@@ -181,23 +182,40 @@ struct ContentView: View {
         VStack(spacing: 0) {
             panelHeader {
                 Button {
-                    chooseFolder()
+                    showThumbnailPanel.toggle()
                 } label: {
-                    Image(systemName: "folder")
+                    Image(systemName: "sidebar.left")
                         .font(.system(size: 13, weight: .medium))
                         .frame(width: 24, height: 24)
                 }
                 .buttonStyle(.plain)
-                .keyboardShortcut("o", modifiers: .command)
-                .quickTooltip("Open Folder")
-                .accessibilityLabel("Open Folder")
+                .foregroundStyle(showThumbnailPanel ? theme.primaryText : theme.secondaryText)
+                .quickTooltip(showThumbnailPanel ? "Hide Folders Panel" : "Show Folders Panel")
+                .accessibilityLabel(showThumbnailPanel ? "Hide Folders Panel" : "Show Folders Panel")
 
-                headerFilterControl
+                if showThumbnailPanel {
+                    Button {
+                        chooseFolder()
+                    } label: {
+                        Image(systemName: "folder")
+                            .font(.system(size: 13, weight: .medium))
+                            .frame(width: 24, height: 24)
+                    }
+                    .buttonStyle(.plain)
+                    .keyboardShortcut("o", modifiers: .command)
+                    .quickTooltip("Open Folder")
+                    .accessibilityLabel("Open Folder")
+
+                    headerFilterControl
+                }
             }
 
-            thumbnailBatchControl
+            if !showThumbnailPanel {
+                Spacer(minLength: 0)
+            } else {
+                thumbnailBatchControl
 
-            if visibleThumbnailEntries.isEmpty {
+                if visibleThumbnailEntries.isEmpty {
                 Text(thumbnailEmptyMessage)
                     .font(.callout)
                     .foregroundStyle(theme.secondaryText)
@@ -260,6 +278,7 @@ struct ContentView: View {
                         }
                     }
                 }
+            }
             }
         }
         .background(theme.panelBackground)
@@ -354,38 +373,68 @@ struct ContentView: View {
 
     private var pinnedPanel: some View {
         VStack(spacing: 0) {
-            panelColumnHeader(title: "Pinned", trailing: "\(pinnedItems.count)") {
-                if isCopyingPinnedFiles {
-                    ProgressView()
-                        .controlSize(.small)
-                        .quickTooltip("Saving Pinned Files")
-                } else {
+            panelHeader {
+                if showPinnedPanel {
+                    Text("Pinned")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(theme.secondaryText)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 0)
+
+                if showPinnedPanel {
+                    if isCopyingPinnedFiles {
+                        ProgressView()
+                            .controlSize(.small)
+                            .quickTooltip("Saving Pinned Files")
+                    } else {
+                        Button {
+                            copyPinnedFilesToFolder()
+                        } label: {
+                            Image(systemName: "folder.badge.plus")
+                                .font(.system(size: 15, weight: .medium))
+                                .frame(width: 24, height: 24)
+                        }
+                        .buttonStyle(.plain)
+                        .quickTooltip("Copy Pinned Files")
+                        .accessibilityLabel("Copy Pinned Files")
+                    }
+
                     Button {
-                        copyPinnedFilesToFolder()
+                        clearPinnedItems()
                     } label: {
-                        Image(systemName: "folder.badge.plus")
+                        Image(systemName: "trash")
                             .font(.system(size: 15, weight: .medium))
                             .frame(width: 24, height: 24)
                     }
                     .buttonStyle(.plain)
-                    .quickTooltip("Copy Pinned Files")
-                    .accessibilityLabel("Copy Pinned Files")
+                    .disabled(pinnedItems.isEmpty)
+                    .quickTooltip("Clear Pinned Files")
+                    .accessibilityLabel("Clear Pinned Files")
+
+                    Text("\(pinnedItems.count)")
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundStyle(theme.mutedText)
+                        .lineLimit(1)
                 }
 
                 Button {
-                    clearPinnedItems()
+                    showPinnedPanel.toggle()
                 } label: {
-                    Image(systemName: "trash")
-                        .font(.system(size: 15, weight: .medium))
+                    Image(systemName: "sidebar.right")
+                        .font(.system(size: 13, weight: .medium))
                         .frame(width: 24, height: 24)
                 }
                 .buttonStyle(.plain)
-                .disabled(pinnedItems.isEmpty)
-                .quickTooltip("Clear Pinned Files")
-                .accessibilityLabel("Clear Pinned Files")
+                .foregroundStyle(showPinnedPanel ? theme.primaryText : theme.secondaryText)
+                .quickTooltip(showPinnedPanel ? "Hide Pinned Panel" : "Show Pinned Panel")
+                .accessibilityLabel(showPinnedPanel ? "Hide Pinned Panel" : "Show Pinned Panel")
             }
 
-            if pinnedItems.isEmpty {
+            if !showPinnedPanel {
+                Spacer(minLength: 0)
+            } else if pinnedItems.isEmpty {
                 Text("No pinned files.")
                     .font(.callout)
                     .foregroundStyle(theme.secondaryText)
@@ -1019,19 +1068,23 @@ struct ContentView: View {
 
     private var quickSortWorkbench: some View {
         HSplitView {
-            if showThumbnailPanel {
-                thumbnailPanel
-                    .frame(minWidth: 190, idealWidth: 230, maxWidth: 320)
-            }
+            thumbnailPanel
+                .frame(
+                    minWidth: showThumbnailPanel ? 190 : collapsedPanelWidth,
+                    idealWidth: showThumbnailPanel ? 230 : collapsedPanelWidth,
+                    maxWidth: showThumbnailPanel ? 320 : collapsedPanelWidth
+                )
 
             previewMainPanel
                 .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
                 .layoutPriority(1)
 
-            if showPinnedPanel {
-                pinnedPanel
-                    .frame(minWidth: 180, idealWidth: 220, maxWidth: 300)
-            }
+            pinnedPanel
+                .frame(
+                    minWidth: showPinnedPanel ? 180 : collapsedPanelWidth,
+                    idealWidth: showPinnedPanel ? 220 : collapsedPanelWidth,
+                    maxWidth: showPinnedPanel ? 300 : collapsedPanelWidth
+                )
         }
         .background(theme.canvasBackground)
     }
@@ -1039,10 +1092,12 @@ struct ContentView: View {
     private var composerWorkbench: some View {
         VSplitView {
             HSplitView {
-                if showThumbnailPanel {
-                    thumbnailPanel
-                        .frame(minWidth: 190, idealWidth: 230, maxWidth: 320)
-                }
+                thumbnailPanel
+                    .frame(
+                        minWidth: showThumbnailPanel ? 190 : collapsedPanelWidth,
+                        idealWidth: showThumbnailPanel ? 230 : collapsedPanelWidth,
+                        maxWidth: showThumbnailPanel ? 320 : collapsedPanelWidth
+                    )
 
                 clipsPane
                     .frame(minWidth: 180, idealWidth: 220, maxWidth: 290)
@@ -1051,10 +1106,12 @@ struct ContentView: View {
                     .frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
                     .layoutPriority(1)
 
-                if showPinnedPanel {
-                    pinnedPanel
-                        .frame(minWidth: 180, idealWidth: 220, maxWidth: 290)
-                }
+                pinnedPanel
+                    .frame(
+                        minWidth: showPinnedPanel ? 180 : collapsedPanelWidth,
+                        idealWidth: showPinnedPanel ? 220 : collapsedPanelWidth,
+                        maxWidth: showPinnedPanel ? 290 : collapsedPanelWidth
+                    )
             }
             .frame(minHeight: 300, maxHeight: .infinity)
 
@@ -1067,32 +1124,6 @@ struct ContentView: View {
     private var mainPanelTabBar: some View {
         ZStack {
             HStack(spacing: 0) {
-                HStack(spacing: 4) {
-                    Button {
-                        showThumbnailPanel.toggle()
-                    } label: {
-                        Image(systemName: "sidebar.left")
-                            .font(.system(size: 14, weight: .medium))
-                            .frame(width: 28, height: 28)
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(showThumbnailPanel ? theme.primaryText : theme.secondaryText)
-                    .quickTooltip(showThumbnailPanel ? "Hide Folders Panel" : "Show Folders Panel")
-                    .accessibilityLabel(showThumbnailPanel ? "Hide Folders Panel" : "Show Folders Panel")
-
-                    Button {
-                        showPinnedPanel.toggle()
-                    } label: {
-                        Image(systemName: "sidebar.right")
-                            .font(.system(size: 14, weight: .medium))
-                            .frame(width: 28, height: 28)
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(showPinnedPanel ? theme.primaryText : theme.secondaryText)
-                    .quickTooltip(showPinnedPanel ? "Hide Pinned Panel" : "Show Pinned Panel")
-                    .accessibilityLabel(showPinnedPanel ? "Hide Pinned Panel" : "Show Pinned Panel")
-                }
-
                 Spacer(minLength: 0)
 
                 Button {
@@ -1784,12 +1815,12 @@ struct ContentView: View {
                 let startTime = timelinePlayheadDragStartTime ?? timelinePlaybackTime
                 timelinePlayheadDragStartTime = startTime
 
-                let delta = TimeInterval(value.translation.width / max(timelinePixelsPerSecond, 1))
+                let delta = TimeInterval(value.translation.width / max(timelinePixelsPerSecond, 0.1))
                 seekTimelinePlayhead(to: startTime + delta)
             }
             .onEnded { value in
                 let startTime = timelinePlayheadDragStartTime ?? timelinePlaybackTime
-                let delta = TimeInterval(value.translation.width / max(timelinePixelsPerSecond, 1))
+                let delta = TimeInterval(value.translation.width / max(timelinePixelsPerSecond, 0.1))
                 seekTimelinePlayhead(to: startTime + delta)
                 timelinePlayheadDragStartTime = nil
             }
@@ -2962,8 +2993,12 @@ struct ContentView: View {
             return 5
         case 0.5..<0.75:
             return 10
+        case 0.25..<0.5:
+            return 30
+        case 0.1..<0.25:
+            return 60
         default:
-            return 15
+            return 120
         }
     }
 
@@ -2976,7 +3011,15 @@ struct ContentView: View {
             return 2
         }
 
-        return 5
+        if timelineMarkerInterval <= 30 {
+            return 5
+        }
+
+        if timelineMarkerInterval <= 60 {
+            return 15
+        }
+
+        return 30
     }
 
     private func timelineContentWidth(for duration: TimeInterval, minimumWidth: CGFloat) -> CGFloat {
@@ -2987,7 +3030,7 @@ struct ContentView: View {
     }
 
     private func timelineDurationToFillWidth(_ width: CGFloat) -> TimeInterval {
-        TimeInterval(max(width - timelineTrackHeaderWidth, 0) / max(timelinePixelsPerSecond, 1))
+        TimeInterval(max(width - timelineTrackHeaderWidth, 0) / max(timelinePixelsPerSecond, 0.1))
     }
 
     private func timelineClipWidth(for clip: EditorTimelineClip) -> CGFloat {
@@ -4827,7 +4870,7 @@ private struct TimelineAdjustmentSpanBlock: View {
             .onChanged { value in
                 let startTime = dragStartTime ?? span.start
                 dragStartTime = startTime
-                onMove(startTime + TimeInterval(value.translation.width / max(pixelsPerSecond, 1)))
+                onMove(startTime + TimeInterval(value.translation.width / max(pixelsPerSecond, 0.1)))
             }
             .onEnded { _ in
                 dragStartTime = nil
@@ -4840,7 +4883,7 @@ private struct TimelineAdjustmentSpanBlock: View {
                 let startTime = keyframeDragStartTime ?? keyframe.time
                 keyframeDragStartTime = startTime
                 draggingKeyframeID = keyframe.id
-                let delta = TimeInterval(value.translation.width / max(pixelsPerSecond, 1))
+                let delta = TimeInterval(value.translation.width / max(pixelsPerSecond, 0.1))
                 onMoveKeyframe(keyframe.id, startTime + delta)
             }
             .onEnded { _ in
@@ -4874,7 +4917,7 @@ private struct TimelineAdjustmentSpanBlock: View {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
                 activeHandle = handle
-                let delta = TimeInterval(value.translation.width / max(pixelsPerSecond, 1))
+                let delta = TimeInterval(value.translation.width / max(pixelsPerSecond, 0.1))
                 switch handle {
                 case .leading:
                     let startTime = dragStartTime ?? span.start
@@ -4936,9 +4979,9 @@ private struct TimelineClipBlock: View {
             let height = geometry.size.height
             let showsLabel = width >= 36 && height > labelHeight + 12
             let thumbnailHeight = max(0, height - (showsLabel ? labelHeight : 0))
-            let aspect = thumbnailFrameAspect
-            let frameWidth = max(24, thumbnailHeight * aspect)
-            let frameCount = max(1, Int(ceil(width / frameWidth)))
+            let widthCap = max(1, Int(floor(width / 24)))
+            let frameCount = min(sampleCount(forDuration: trim.duration), widthCap)
+            let frameWidth = width / CGFloat(frameCount)
 
             VStack(spacing: 0) {
                 ZStack(alignment: .leading) {
@@ -5007,11 +5050,13 @@ private struct TimelineClipBlock: View {
         }
     }
 
-    private var thumbnailFrameAspect: CGFloat {
-        guard let thumbnail, thumbnail.size.height > 0 else {
-            return 16.0 / 9.0
-        }
-        return max(0.5, thumbnail.size.width / thumbnail.size.height)
+    private func sampleCount(forDuration duration: TimeInterval) -> Int {
+        if duration < 10 { return 1 }
+        if duration < 30 { return 2 }
+        if duration < 120 { return 3 }
+        if duration < 600 { return 4 }
+        if duration < 1800 { return 5 }
+        return 6
     }
 
     private func filmstripFrame(forTileIndex index: Int, frameCount: Int) -> NSImage? {
@@ -5070,7 +5115,7 @@ private struct TimelineClipBlock: View {
                 trimDragStart = startTrim
                 activeTrimHandle = handle
 
-                let delta = TimeInterval(value.translation.width / max(pixelsPerSecond, 1))
+                let delta = TimeInterval(value.translation.width / max(pixelsPerSecond, 0.1))
                 switch handle {
                 case .leading:
                     onTrimChange(MediaTrim(start: startTrim.start + delta, end: startTrim.end))
