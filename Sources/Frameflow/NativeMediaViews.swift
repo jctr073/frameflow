@@ -1,7 +1,7 @@
 @preconcurrency import AppKit
 import AVKit
 import ImageIO
-import MediaBrowserCore
+import FrameflowCore
 import SwiftUI
 import UniformTypeIdentifiers
 import WebKit

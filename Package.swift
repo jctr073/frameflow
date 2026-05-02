@@ -3,28 +3,28 @@
 import PackageDescription
 
 let package = Package(
-    name: "MediaBrowser",
+    name: "Frameflow",
     platforms: [
         .macOS(.v14)
     ],
     products: [
-        .executable(name: "MediaBrowser", targets: ["MediaBrowser"]),
-        .executable(name: "MediaBrowserLogicTests", targets: ["MediaBrowserLogicTests"])
+        .executable(name: "Frameflow", targets: ["Frameflow"]),
+        .executable(name: "FrameflowLogicTests", targets: ["FrameflowLogicTests"])
     ],
     targets: [
         .target(
-            name: "MediaBrowserCore",
-            path: "Sources/MediaBrowserCore"
+            name: "FrameflowCore",
+            path: "Sources/FrameflowCore"
         ),
         .executableTarget(
-            name: "MediaBrowser",
-            dependencies: ["MediaBrowserCore"],
-            path: "Sources/MediaBrowser"
+            name: "Frameflow",
+            dependencies: ["FrameflowCore"],
+            path: "Sources/Frameflow"
         ),
         .executableTarget(
-            name: "MediaBrowserLogicTests",
-            dependencies: ["MediaBrowserCore"],
-            path: "Tests/MediaBrowserLogicTests"
+            name: "FrameflowLogicTests",
+            dependencies: ["FrameflowCore"],
+            path: "Tests/FrameflowLogicTests"
         )
     ]
 )

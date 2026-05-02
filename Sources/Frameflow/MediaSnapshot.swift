@@ -1,7 +1,7 @@
 import AppKit
 import AVFoundation
 import ImageIO
-import MediaBrowserCore
+import FrameflowCore
 import UniformTypeIdentifiers
 
 enum MediaSnapshot {
@@ -55,7 +55,7 @@ enum MediaSnapshot {
 
     private static func snapshotURL(for item: MediaItem, time: TimeInterval) throws -> URL {
         let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("MediaBrowserSnapshots", isDirectory: true)
+            .appendingPathComponent("FrameflowSnapshots", isDirectory: true)
         try FileManager.default.createDirectory(
             at: directory,
             withIntermediateDirectories: true

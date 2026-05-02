@@ -1,5 +1,5 @@
 import CoreGraphics
-import MediaBrowserCore
+import FrameflowCore
 
 @main
 struct TimelineAdjustmentTestRunner {

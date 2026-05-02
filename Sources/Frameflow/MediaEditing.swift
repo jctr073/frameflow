@@ -2,7 +2,7 @@
 import CoreGraphics
 import Foundation
 import ImageIO
-import MediaBrowserCore
+import FrameflowCore
 import UniformTypeIdentifiers
 
 struct PinnedMediaItem: Identifiable, Hashable, Sendable {

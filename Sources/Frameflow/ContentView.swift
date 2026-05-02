@@ -1,5 +1,5 @@
 import AppKit
-import MediaBrowserCore
+import FrameflowCore
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -4172,7 +4172,7 @@ struct ContentView: View {
         NSApplication.shared.setActivationPolicy(.regular)
         DispatchQueue.main.async {
             if let window = NSApplication.shared.windows.first {
-                window.title = "MediaBrowser"
+                window.title = "Frameflow"
                 window.titleVisibility = .hidden
                 window.appearance = NSAppearance(named: .darkAqua)
                 window.backgroundColor = activeTheme.windowBackgroundNSColor
@@ -4183,7 +4183,7 @@ struct ContentView: View {
                     if let existing = titlebar.viewWithTag(titleLabelTag) as? NSTextField {
                         label = existing
                     } else {
-                        label = NSTextField(labelWithString: "MediaBrowser")
+                        label = NSTextField(labelWithString: "Frameflow")
                         label.tag = titleLabelTag
                         label.font = .systemFont(ofSize: 13, weight: .semibold)
                         label.alignment = .center

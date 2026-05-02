@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-APP_PATH="$ROOT_DIR/.build/app/MediaBrowser.app"
-DESTINATION="/Applications/MediaBrowser.app"
+APP_PATH="$ROOT_DIR/.build/app/Frameflow.app"
+DESTINATION="/Applications/Frameflow.app"
 
 "$ROOT_DIR/scripts/build-app.sh"
 

@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct MediaBrowserApp: App {
+struct FrameflowApp: App {
     @StateObject private var mainPanelState = MainPanelState()
     @AppStorage("editorThemeID") private var editorThemeRawValue = EditorThemeID.amberStudio.rawValue
 

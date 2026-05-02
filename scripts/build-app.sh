@@ -1,8 +1,8 @@
 #!/bin/zsh
 set -euo pipefail
 
-APP_NAME="MediaBrowser"
-BUNDLE_ID="com.local.MediaBrowser"
+APP_NAME="Frameflow"
+BUNDLE_ID="com.local.Frameflow"
 VERSION="0.1.0"
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -11,7 +11,7 @@ CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 ICONSET_DIR="$ROOT_DIR/.build/app-icon.iconset"
-ICNS_PATH="$ROOT_DIR/.build/MediaBrowser.icns"
+ICNS_PATH="$ROOT_DIR/.build/Frameflow.icns"
 
 cd "$ROOT_DIR"
 
@@ -28,7 +28,7 @@ cp "$BIN_DIR/$APP_NAME" "$MACOS_DIR/$APP_NAME"
 
 swift "$ROOT_DIR/scripts/create-icon.swift" "$ICONSET_DIR"
 iconutil -c icns "$ICONSET_DIR" -o "$ICNS_PATH"
-cp "$ICNS_PATH" "$RESOURCES_DIR/MediaBrowser.icns"
+cp "$ICNS_PATH" "$RESOURCES_DIR/Frameflow.icns"
 
 cat > "$CONTENTS_DIR/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -44,7 +44,7 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
     <key>CFBundleIdentifier</key>
     <string>$BUNDLE_ID</string>
     <key>CFBundleIconFile</key>
-    <string>MediaBrowser</string>
+    <string>Frameflow</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>

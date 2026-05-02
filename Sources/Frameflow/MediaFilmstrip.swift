@@ -1,6 +1,6 @@
 import AppKit
 import AVFoundation
-import MediaBrowserCore
+import FrameflowCore
 
 enum MediaFilmstrip {
     static let frameCount = 16

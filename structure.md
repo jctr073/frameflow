@@ -1,4 +1,4 @@
-# Media Browser Structure
+# Frameflow Structure
 
 This document maps the main UI panels and controls to their names in the SwiftUI codebase.
 
@@ -6,12 +6,12 @@ This document maps the main UI panels and controls to their names in the SwiftUI
 ContentView
 └─ VStack
    ├─ mainPanelTabBar
-   │  ├─ Media tab
+   │  ├─ Quick Sort tab
    │  ├─ Composer tab
    │  └─ Export Timeline button
    │
    ├─ activeWorkbench
-   │  ├─ mediaWorkbench (Media tab)
+   │  ├─ quickSortWorkbench (Quick Sort tab)
    │  │  └─ HSplitView
    │  │     ├─ thumbnailPanel
    │  │     ├─ previewMainPanel
@@ -39,8 +39,7 @@ ContentView
 
 ```text
 thumbnailPanel
-├─ panelColumnHeader ("Folders", Open Folder button, file count)
-├─ filterControl
+├─ panelHeader (Open Folder button, filterControl)
 ├─ thumbnailBatchControl
 └─ vertical List
    ├─ FolderRow
@@ -58,7 +57,7 @@ previewMainPanel
       └─ CropOverlay
 
 clipsPane
-├─ panelColumnHeader ("Project", Add button)
+├─ panelColumnHeader ("Clips", plus import button)
 └─ vertical EditorClipCard stack
 
 playerPane
@@ -112,7 +111,7 @@ ContentView overlays/background helpers
 
 ```text
 View menu
-├─ Preview Panel checkbox
+├─ Quick Sort Panel checkbox
 ├─ Composer Panel checkbox
 └─ Color Theme
    ├─ Amber studio
@@ -195,18 +194,18 @@ honors those audio settings.
 
 ## Code Anchors
 
-- Main app shell: `Sources/MediaBrowser/ContentView.swift`
-- Theme model and palettes: `Sources/MediaBrowser/EditorTheme.swift`
-- Main panel tab state: `Sources/MediaBrowser/MainPanelState.swift`
-- `thumbnailPanel`: `Sources/MediaBrowser/ContentView.swift`
-- `pinnedPanel`: `Sources/MediaBrowser/ContentView.swift`
-- `statusBar`: `Sources/MediaBrowser/ContentView.swift`
-- `mainPanelTabBar`, `activeWorkbench`, `mediaWorkbench`, `composerWorkbench`: `Sources/MediaBrowser/ContentView.swift`
-- `clipsPane`, `playerPane`, `timelinePane`, `editingToolbar`, `previewPanel`: `Sources/MediaBrowser/ContentView.swift`
-- `TimelineSequenceVideoView`: `Sources/MediaBrowser/NativeMediaViews.swift`
-- timeline export: `Sources/MediaBrowser/MediaEditing.swift`
-- timeline adjustment crop model: `Sources/MediaBrowserCore/TimelineAdjustment.swift`
-- `TrimControls`: `Sources/MediaBrowser/ContentView.swift`
-- `PreviewPane`: `Sources/MediaBrowser/ContentView.swift`
-- `NativeVideoView`, `NativeVideoSurface`, `NativeVideoControls`: `Sources/MediaBrowser/NativeMediaViews.swift`
-- `quickTooltipOverlay`: `Sources/MediaBrowser/QuickTooltip.swift`
+- Main app shell: `Sources/Frameflow/ContentView.swift`
+- Theme model and palettes: `Sources/Frameflow/EditorTheme.swift`
+- Main panel tab state: `Sources/Frameflow/MainPanelState.swift`
+- `thumbnailPanel`: `Sources/Frameflow/ContentView.swift`
+- `pinnedPanel`: `Sources/Frameflow/ContentView.swift`
+- `statusBar`: `Sources/Frameflow/ContentView.swift`
+- `mainPanelTabBar`, `activeWorkbench`, `quickSortWorkbench`, `composerWorkbench`: `Sources/Frameflow/ContentView.swift`
+- `clipsPane`, `playerPane`, `timelinePane`, `editingToolbar`, `previewPanel`: `Sources/Frameflow/ContentView.swift`
+- `TimelineSequenceVideoView`: `Sources/Frameflow/NativeMediaViews.swift`
+- timeline export: `Sources/Frameflow/MediaEditing.swift`
+- timeline adjustment crop model: `Sources/FrameflowCore/TimelineAdjustment.swift`
+- `TrimControls`: `Sources/Frameflow/ContentView.swift`
+- `PreviewPane`: `Sources/Frameflow/ContentView.swift`
+- `NativeVideoView`, `NativeVideoSurface`, `NativeVideoControls`: `Sources/Frameflow/NativeMediaViews.swift`
+- `quickTooltipOverlay`: `Sources/Frameflow/QuickTooltip.swift`
