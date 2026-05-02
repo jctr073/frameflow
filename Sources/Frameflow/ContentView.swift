@@ -3784,10 +3784,17 @@ struct ContentView: View {
             return
         }
 
+        let allWebPSources = exportClips.allSatisfy { $0.item.kind == .webp }
+        let allVideoSources = exportClips.allSatisfy { $0.item.kind == .video }
+        guard allWebPSources || allVideoSources else {
+            showTimelineExportFailure(MediaExportError.unsupportedTimelineClip)
+            return
+        }
+
         let panel = NSSavePanel()
-        panel.allowedContentTypes = [.mpeg4Movie]
+        panel.allowedContentTypes = allWebPSources ? [.webP] : [.mpeg4Movie]
         panel.canCreateDirectories = true
-        panel.nameFieldStringValue = "Timeline Export.mp4"
+        panel.nameFieldStringValue = allWebPSources ? "Timeline Export.webp" : "Timeline Export.mp4"
         panel.directoryURL = library.folderURL
         panel.message = "Choose where to save the timeline export."
 
