@@ -357,7 +357,6 @@ struct TimelinePlaybackPosition: Equatable {
 struct TimelineSequenceVideoView: View {
     @Environment(\.editorTheme) private var theme
     let clips: [TimelinePlaybackClip]
-    let adjustmentSpans: [TimelineAdjustmentSpan]
     let zoomMultiplier: Double
     let fillsFrame: Bool
     let seekRequest: TimelinePlaybackSeekRequest?
@@ -390,16 +389,13 @@ struct TimelineSequenceVideoView: View {
                 .padding(.bottom, 12)
         }
         .onAppear {
-            controller.load(clips, adjustmentSpans: adjustmentSpans, seekTime: seekRequest?.time)
+            controller.load(clips, seekTime: seekRequest?.time)
         }
         .onDisappear {
             controller.stop()
         }
         .onChange(of: clips) {
-            controller.load(clips, adjustmentSpans: adjustmentSpans)
-        }
-        .onChange(of: adjustmentSpans) {
-            controller.load(clips, adjustmentSpans: adjustmentSpans)
+            controller.load(clips)
         }
         .onChange(of: seekRequest) {
             guard let seekRequest else { return }
@@ -503,7 +499,6 @@ private final class TimelineSequenceVideoController: ObservableObject {
     @Published var position = TimelinePlaybackPosition(timelineTime: 0, clipID: nil, sourceTime: 0)
 
     private var clips: [TimelinePlaybackClip] = []
-    private var adjustmentSpans: [TimelineAdjustmentSpan] = []
     private var ranges: [TimelinePlaybackRange] = []
     private var loadTask: Task<Void, Never>?
     private var endObserver: NSObjectProtocol?
@@ -538,12 +533,11 @@ private final class TimelineSequenceVideoController: ObservableObject {
 
     func load(
         _ clips: [TimelinePlaybackClip],
-        adjustmentSpans: [TimelineAdjustmentSpan],
         seekTime: TimeInterval? = nil
     ) {
         installTimeObserverIfNeeded()
 
-        guard clips != self.clips || adjustmentSpans != self.adjustmentSpans else {
+        guard clips != self.clips else {
             return
         }
 
@@ -551,7 +545,6 @@ private final class TimelineSequenceVideoController: ObservableObject {
         let requestedTime = seekTime ?? min(currentTime, duration)
         pendingSeekTime = seekTime
         self.clips = clips
-        self.adjustmentSpans = adjustmentSpans
         loadTask?.cancel()
         removeEndObserver()
 
@@ -566,10 +559,9 @@ private final class TimelineSequenceVideoController: ObservableObject {
         }
 
         isLoading = true
-        let adjustmentSpans = adjustmentSpans
         loadTask = Task { @MainActor in
             do {
-                let result = try await Self.playerItem(for: clips, adjustmentSpans: adjustmentSpans)
+                let result = try await Self.playerItem(for: clips)
                 guard !Task.isCancelled else { return }
 
                 ranges = result.ranges
@@ -704,10 +696,7 @@ private final class TimelineSequenceVideoController: ObservableObject {
     }
 
     @MainActor
-    private static func playerItem(
-        for clips: [TimelinePlaybackClip],
-        adjustmentSpans: [TimelineAdjustmentSpan]
-    ) async throws -> TimelineSequenceBuildResult {
+    private static func playerItem(for clips: [TimelinePlaybackClip]) async throws -> TimelineSequenceBuildResult {
         let composition = AVMutableComposition()
         var instructions: [AVMutableVideoCompositionInstruction] = []
         var audioParameters: [AVMutableAudioMixInputParameters] = []
@@ -753,13 +742,9 @@ private final class TimelineSequenceVideoController: ObservableObject {
             )
             let displayTransform = preferredTransform.concatenating(normalize)
             if renderSize == nil {
-                let timelineRenderSize = TimelineCropRenderer.renderSize(
-                    displaySize: displaySize,
-                    adjustmentSpans: adjustmentSpans
-                )
                 renderSize = CGSize(
-                    width: evenPlaybackDimension(timelineRenderSize.width),
-                    height: evenPlaybackDimension(timelineRenderSize.height)
+                    width: evenPlaybackDimension(displaySize.width),
+                    height: evenPlaybackDimension(displaySize.height)
                 )
             }
 
@@ -780,7 +765,7 @@ private final class TimelineSequenceVideoController: ObservableObject {
                     displayTransform: displayTransform,
                     displaySize: displaySize,
                     renderSize: renderSize,
-                    adjustmentSpans: adjustmentSpans
+                    adjustmentSpans: []
                 )
             } else {
                 layerInstruction.setTransform(preferredTransform, at: cursor)
