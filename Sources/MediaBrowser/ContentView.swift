@@ -52,7 +52,8 @@ struct ContentView: View {
     @State private var timelinePlaybackTime: TimeInterval = 0
     @State private var timelineSeekRequest: TimelinePlaybackSeekRequest?
     @State private var isTimelineDropTargeted = false
-    @State private var timelineZoom = 1.0
+    @State private var timelineZoom = 1.75
+    @State private var timelinePlayheadDragStartTime: TimeInterval?
     @State private var isExportingTimeline = false
     @State private var activePanel: SidePanel = .thumbnail
     @State private var thumbnailSelectionIDs: Set<URL> = []
@@ -74,6 +75,14 @@ struct ContentView: View {
     private let sidePanelRowInsets = EdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 10)
     private let topToolbarHeight: CGFloat = 48
     private let timelineBasePixelsPerSecond: CGFloat = 12
+    private let timelineRulerHeight: CGFloat = 34
+    private let timelineAdjustmentLayerHeight: CGFloat = 44
+    private let timelineVideoTrackHeight: CGFloat = 52
+    private let timelineTrackHeaderWidth: CGFloat = 64
+    private let timelineRulerLabelTrailingPadding: CGFloat = 72
+    private let timelinePlayheadColor = Color(red: 1.0, green: 0.34, blue: 0.0)
+    private let timelinePlayheadHandleSize = CGSize(width: 24, height: 28)
+    private let timelinePlayheadHitWidth: CGFloat = 32
 
     init(initialFolderURL: URL?, mainPanelState: MainPanelState) {
         self.initialFolderURL = initialFolderURL
@@ -1349,13 +1358,8 @@ struct ContentView: View {
                     .frame(height: 1)
             }
 
-            timelineRuler
-                .frame(height: 18)
-
-            VStack(spacing: 0) {
-                timelineTrackRow(title: "Video", systemImage: "film", clips: timelineClips, acceptsDrops: true)
-            }
-            .frame(height: 52)
+            timelineBody
+                .frame(height: timelineRulerHeight + timelineAdjustmentLayerHeight + timelineVideoTrackHeight)
         }
         .background(theme.timelineBackground)
         .onDrop(
@@ -1365,27 +1369,59 @@ struct ContentView: View {
         )
     }
 
+    private var timelineBody: some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .topLeading) {
+                VStack(spacing: 0) {
+                    timelineRuler
+                        .frame(height: timelineRulerHeight)
+
+                    adjustmentLayer
+                        .frame(height: timelineAdjustmentLayerHeight)
+
+                    timelineTrackRow(title: "Video", systemImage: "film", clips: timelineClips, acceptsDrops: true)
+                        .frame(height: timelineVideoTrackHeight)
+                }
+
+                timelinePlayheadOverlay(in: geometry.size)
+            }
+        }
+    }
+
     private var timelineRuler: some View {
         GeometryReader { geometry in
             let interval = timelineMarkerInterval
-            let contentDuration = max(totalTimelineDuration, interval * 5)
+            let minorInterval = timelineMinorMarkerInterval
+            let visibleDuration = timelineDurationToFillWidth(geometry.size.width)
+            let contentDuration = max(totalTimelineDuration, interval * 5, visibleDuration)
             let markerCount = max(1, Int(ceil(contentDuration / interval)))
-            let labelGutter: CGFloat = 64
-            let contentWidth = max(geometry.size.width, labelGutter + CGFloat(contentDuration) * timelinePixelsPerSecond)
+            let tickCount = max(1, Int(ceil(contentDuration / minorInterval)))
+            let majorTickStride = max(1, Int(round(interval / minorInterval)))
+            let contentWidth = timelineContentWidth(for: contentDuration, minimumWidth: geometry.size.width)
 
             ZStack(alignment: .topLeading) {
+                ForEach(0...tickCount, id: \.self) { tick in
+                    let seconds = TimeInterval(tick) * minorInterval
+                    let isMajorTick = tick % majorTickStride == 0
+
+                    Rectangle()
+                        .fill(theme.secondaryText.opacity(isMajorTick ? 0.68 : 0.34))
+                        .frame(width: 1, height: isMajorTick ? 12 : 5)
+                        .offset(
+                            x: timelineTrackHeaderWidth + CGFloat(seconds) * timelinePixelsPerSecond,
+                            y: geometry.size.height - (isMajorTick ? 17 : 10)
+                        )
+                }
+
                 ForEach(0...markerCount, id: \.self) { marker in
                     let seconds = TimeInterval(marker) * interval
-                    VStack(alignment: .leading, spacing: 2) {
-                        Rectangle()
-                            .fill(theme.secondaryText.opacity(0.55))
-                            .frame(width: 1, height: 5)
 
-                        Text(MediaTrim.format(seconds))
-                            .font(.system(size: 8, weight: .medium, design: .monospaced))
-                            .foregroundStyle(theme.mutedText)
-                    }
-                    .offset(x: labelGutter + CGFloat(seconds) * timelinePixelsPerSecond)
+                    Text(MediaTrim.format(seconds))
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(theme.mutedText)
+                        .lineLimit(1)
+                        .fixedSize()
+                        .offset(x: timelineTrackHeaderWidth + CGFloat(seconds) * timelinePixelsPerSecond, y: 3)
                 }
             }
             .frame(width: contentWidth, height: geometry.size.height, alignment: .topLeading)
@@ -1398,6 +1434,103 @@ struct ContentView: View {
         }
     }
 
+    private var adjustmentLayer: some View {
+        HStack(spacing: 0) {
+            timelineTrackHeader(title: "Adjust", systemImage: "slider.horizontal.3")
+
+            GeometryReader { geometry in
+                let contentWidth = timelineContentWidth(for: totalTimelineDuration, minimumWidth: geometry.size.width)
+
+                ZStack(alignment: .topLeading) {
+                    Rectangle()
+                        .fill(theme.trackAlternateBackground.opacity(0.58))
+
+                    Rectangle()
+                        .fill(theme.hairline)
+                        .frame(height: 1)
+                        .offset(y: geometry.size.height - 1)
+                }
+                .frame(width: contentWidth, height: geometry.size.height, alignment: .topLeading)
+            }
+            .background(theme.trackAlternateBackground.opacity(0.58))
+        }
+    }
+
+    private func timelinePlayheadOverlay(in size: CGSize) -> some View {
+        let clampedTime = clampedTimelinePlayheadTime(timelinePlaybackTime)
+        let playheadX = timelineTrackHeaderWidth + CGFloat(clampedTime) * timelinePixelsPerSecond
+        let lineTop = timelinePlayheadHandleSize.height - 4
+
+        return ZStack(alignment: .topLeading) {
+            Rectangle()
+                .fill(timelinePlayheadColor)
+                .frame(width: 2, height: max(0, size.height - lineTop))
+                .offset(x: playheadX - 1, y: lineTop)
+                .allowsHitTesting(false)
+
+            TimelinePlayheadHandleShape()
+                .fill(Color.black.opacity(0.20))
+                .overlay {
+                    TimelinePlayheadHandleShape()
+                        .stroke(
+                            timelinePlayheadColor,
+                            style: StrokeStyle(lineWidth: 3, lineJoin: .round)
+                        )
+                }
+                .frame(width: timelinePlayheadHandleSize.width, height: timelinePlayheadHandleSize.height)
+                .offset(x: playheadX - timelinePlayheadHandleSize.width / 2, y: 1)
+                .allowsHitTesting(false)
+
+            Rectangle()
+                .fill(Color.black.opacity(0.001))
+                .frame(width: timelinePlayheadHitWidth, height: size.height)
+                .contentShape(Rectangle())
+                .offset(x: playheadX - timelinePlayheadHitWidth / 2)
+                .gesture(timelinePlayheadDragGesture)
+                .quickTooltip("Drag Playhead")
+                .accessibilityLabel("Drag Playhead")
+        }
+        .frame(width: size.width, height: size.height, alignment: .topLeading)
+    }
+
+    private var timelinePlayheadDragGesture: some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                let startTime = timelinePlayheadDragStartTime ?? timelinePlaybackTime
+                timelinePlayheadDragStartTime = startTime
+
+                let delta = TimeInterval(value.translation.width / max(timelinePixelsPerSecond, 1))
+                seekTimelinePlayhead(to: startTime + delta)
+            }
+            .onEnded { value in
+                let startTime = timelinePlayheadDragStartTime ?? timelinePlaybackTime
+                let delta = TimeInterval(value.translation.width / max(timelinePixelsPerSecond, 1))
+                seekTimelinePlayhead(to: startTime + delta)
+                timelinePlayheadDragStartTime = nil
+            }
+    }
+
+    private func timelineTrackHeader(title: String, systemImage: String) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: systemImage)
+                .font(.system(size: 13, weight: .semibold))
+                .frame(width: 16)
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+        }
+        .foregroundStyle(theme.secondaryText)
+        .padding(.horizontal, 5)
+        .frame(width: timelineTrackHeaderWidth, alignment: .leading)
+        .frame(maxHeight: .infinity)
+        .background(theme.trackAlternateBackground)
+        .overlay(alignment: .trailing) {
+            Rectangle()
+                .fill(theme.hairline)
+                .frame(width: 1)
+        }
+    }
+
     private func timelineTrackRow(
         title: String,
         systemImage: String,
@@ -1405,24 +1538,7 @@ struct ContentView: View {
         acceptsDrops: Bool
     ) -> some View {
         HStack(spacing: 0) {
-            HStack(spacing: 5) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 13, weight: .semibold))
-                    .frame(width: 16)
-                Text(title)
-                    .font(.caption.weight(.semibold))
-                    .lineLimit(1)
-            }
-            .foregroundStyle(theme.secondaryText)
-            .frame(width: 54, alignment: .leading)
-            .frame(maxHeight: .infinity)
-            .padding(.horizontal, 5)
-            .background(theme.trackAlternateBackground)
-            .overlay(alignment: .trailing) {
-                Rectangle()
-                    .fill(theme.hairline)
-                    .frame(width: 1)
-            }
+            timelineTrackHeader(title: title, systemImage: systemImage)
 
             ScrollView(.horizontal) {
                 HStack(spacing: 0) {
@@ -1436,7 +1552,6 @@ struct ContentView: View {
                             thumbnail: sourceClip.flatMap(editorClipThumbnail(for:)),
                             isSelected: selectedTimelineClipID == clip.id,
                             hasCrop: clip.crop?.isFullFrame == false,
-                            playheadProgress: timelinePlayheadProgress(for: clip),
                             trim: trim,
                             totalDuration: duration,
                             pixelsPerSecond: timelinePixelsPerSecond,
@@ -2406,21 +2521,93 @@ struct ContentView: View {
         max(actualTimelineDuration, 30)
     }
 
+    private var timelineSeekableDuration: TimeInterval {
+        timelineClips.isEmpty ? totalTimelineDuration : max(actualTimelineDuration, 0)
+    }
+
     private var timelineMarkerInterval: TimeInterval {
         switch timelineZoom {
-        case 2.0...:
+        case 0.75...:
             return 5
-        case 1.25..<2.0:
+        case 0.5..<0.75:
             return 10
-        case 0.75..<1.25:
-            return 30
         default:
-            return 60
+            return 15
         }
+    }
+
+    private var timelineMinorMarkerInterval: TimeInterval {
+        if timelineMarkerInterval <= 5 {
+            return 1
+        }
+
+        if timelineMarkerInterval <= 10 {
+            return 2
+        }
+
+        return 5
+    }
+
+    private func timelineContentWidth(for duration: TimeInterval, minimumWidth: CGFloat) -> CGFloat {
+        max(
+            minimumWidth,
+            timelineTrackHeaderWidth + CGFloat(duration) * timelinePixelsPerSecond + timelineRulerLabelTrailingPadding
+        )
+    }
+
+    private func timelineDurationToFillWidth(_ width: CGFloat) -> TimeInterval {
+        TimeInterval(max(width - timelineTrackHeaderWidth, 0) / max(timelinePixelsPerSecond, 1))
     }
 
     private func timelineClipWidth(for clip: EditorTimelineClip) -> CGFloat {
         min(max(CGFloat(timelineDuration(for: clip)) * timelinePixelsPerSecond, 18), 900)
+    }
+
+    private func clampedTimelinePlayheadTime(_ time: TimeInterval) -> TimeInterval {
+        min(max(time, 0), max(timelineSeekableDuration, 0))
+    }
+
+    private func seekTimelinePlayhead(to time: TimeInterval) {
+        let timelineTime = clampedTimelinePlayheadTime(time)
+        timelinePlaybackTime = timelineTime
+        timelineSeekRequest = TimelinePlaybackSeekRequest(time: timelineTime)
+        syncTimelineSelection(to: timelineTime)
+    }
+
+    private func syncTimelineSelection(to timelineTime: TimeInterval) {
+        guard !timelineClips.isEmpty else {
+            selectedTimelineClipID = nil
+            editorPlayerTime = 0
+            return
+        }
+
+        let timelineTime = clampedTimelinePlayheadTime(timelineTime)
+        var cursor = TimeInterval(0)
+
+        for index in timelineClips.indices {
+            let clip = timelineClips[index]
+            let duration = timelineDuration(for: clip)
+            let end = cursor + duration
+            let isLastClip = index == timelineClips.index(before: timelineClips.endIndex)
+            let containsTime = timelineTime >= cursor
+                && (timelineTime < end || (isLastClip && timelineTime <= end) || (duration <= 0 && timelineTime == cursor))
+
+            if containsTime {
+                selectedTimelineClipID = clip.id
+                selectedEditorClipID = nil
+
+                if let sourceDuration = editorClip(for: clip)?.status?.duration {
+                    let trim = timelineTrim(for: clip, duration: sourceDuration)
+                    let sourceTime = trim.start + max(0, timelineTime - cursor)
+                    editorPlayerTime = min(max(sourceTime, trim.start), trim.end)
+                } else {
+                    editorPlayerTime = 0
+                }
+                return
+            }
+
+            cursor = end
+        }
     }
 
     private func timelineStartTime(for targetClip: EditorTimelineClip) -> TimeInterval {
@@ -2433,31 +2620,6 @@ struct ContentView: View {
         }
 
         return 0
-    }
-
-    private func timelineRange(for targetClip: EditorTimelineClip) -> ClosedRange<TimeInterval> {
-        let start = timelineStartTime(for: targetClip)
-        return start...max(start, start + timelineDuration(for: targetClip))
-    }
-
-    private func timelinePlayheadProgress(for clip: EditorTimelineClip) -> Double? {
-        let range = timelineRange(for: clip)
-        if timelinePlaybackTime >= range.lowerBound,
-           (timelinePlaybackTime < range.upperBound || timelineClips.last?.id == clip.id),
-           range.upperBound > range.lowerBound {
-            return min(max((timelinePlaybackTime - range.lowerBound) / (range.upperBound - range.lowerBound), 0), 1)
-        }
-
-        guard selectedTimelineClipID == clip.id,
-              let duration = editorClip(for: clip)?.status?.duration,
-              duration > 0
-        else {
-            return nil
-        }
-
-        let trim = timelineTrim(for: clip, duration: duration)
-        guard trim.duration > 0 else { return nil }
-        return min(max((editorPlayerTime - trim.start) / trim.duration, 0), 1)
     }
 
     private var selectedTimelineClipHasTrim: Bool {
@@ -3594,13 +3756,46 @@ private struct TimelineClipReorderDropDelegate: DropDelegate {
     }
 }
 
+private struct TimelinePlayheadHandleShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let cornerRadius = rect.width * 0.18
+        let shoulderY = rect.maxY - rect.height * 0.30
+
+        path.move(to: CGPoint(x: rect.midX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.minX + cornerRadius, y: shoulderY))
+        path.addQuadCurve(
+            to: CGPoint(x: rect.minX, y: shoulderY - cornerRadius),
+            control: CGPoint(x: rect.minX, y: shoulderY)
+        )
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + cornerRadius))
+        path.addQuadCurve(
+            to: CGPoint(x: rect.minX + cornerRadius, y: rect.minY),
+            control: CGPoint(x: rect.minX, y: rect.minY)
+        )
+        path.addLine(to: CGPoint(x: rect.maxX - cornerRadius, y: rect.minY))
+        path.addQuadCurve(
+            to: CGPoint(x: rect.maxX, y: rect.minY + cornerRadius),
+            control: CGPoint(x: rect.maxX, y: rect.minY)
+        )
+        path.addLine(to: CGPoint(x: rect.maxX, y: shoulderY - cornerRadius))
+        path.addQuadCurve(
+            to: CGPoint(x: rect.maxX - cornerRadius, y: shoulderY),
+            control: CGPoint(x: rect.maxX, y: shoulderY)
+        )
+        path.addLine(to: CGPoint(x: rect.midX, y: rect.maxY))
+        path.closeSubpath()
+
+        return path
+    }
+}
+
 private struct TimelineClipBlock: View {
     @Environment(\.editorTheme) private var theme
     let sourceClip: EditorClip?
     let thumbnail: NSImage?
     let isSelected: Bool
     let hasCrop: Bool
-    let playheadProgress: Double?
     let trim: MediaTrim
     let totalDuration: TimeInterval
     let pixelsPerSecond: CGFloat
@@ -3660,15 +3855,6 @@ private struct TimelineClipBlock: View {
             .overlay {
                 Rectangle()
                     .stroke(isSelected ? theme.accent : Color.white.opacity(0.16), lineWidth: isSelected ? 2 : 1)
-            }
-            .overlay(alignment: .leading) {
-                if let playheadProgress {
-                    Rectangle()
-                        .fill(Color.white.opacity(0.88))
-                        .frame(width: 2)
-                        .offset(x: max(0, min(geometry.size.width - 2, geometry.size.width * playheadProgress)))
-                        .shadow(color: .black.opacity(0.25), radius: 2)
-                }
             }
             .overlay(alignment: .topTrailing) {
                 if hasCrop {

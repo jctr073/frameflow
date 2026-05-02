@@ -76,9 +76,9 @@ timelinePane
 │  ├─ Delete Timeline Clip
 │  └─ Timeline Zoom slider
 ├─ timelineRuler
+├─ adjustmentLayer
 └─ Video track drop target
    └─ TimelineClipBlock list
-      ├─ selected playhead indicator
       ├─ drag-to-reorder behavior
       ├─ trim start handle
       └─ trim end handle
