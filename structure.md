@@ -83,11 +83,14 @@ timelinePane
 │     ├─ resize start handle
 │     ├─ resize end handle
 │     └─ crop keyframe markers with delete context menu
-└─ Video track drop target
-   └─ TimelineClipBlock list
-      ├─ drag-to-reorder behavior
-      ├─ trim start handle
-      └─ trim end handle
+├─ Video track drop target
+│  └─ TimelineClipBlock list
+│     ├─ drag-to-reorder behavior
+│     ├─ trim start handle
+│     └─ trim end handle
+└─ timelinePlayheadOverlay
+   ├─ vertical timeline position line
+   └─ TimelinePlayheadHandleShape top drag handle
 
 pinnedPanel
 ├─ panelColumnHeader ("Pinned", Copy Pinned Files, Clear Pinned Files, pinned count)
@@ -152,6 +155,15 @@ track. Timeline playback also updates
 `selectedTimelineClipID` as the playhead crosses clip boundaries, so the active
 `TimelineClipBlock` is highlighted while the full sequence plays.
 
+The red/orange timeline position indicator is `timelinePlayheadOverlay(in:)` in
+`ContentView.swift`. It draws the vertical playhead line using `timelinePlayheadColor`,
+uses `TimelinePlayheadHandleShape` for the top draggable handle, and updates
+`timelinePlaybackTime` through `timelinePlayheadDragGesture`. As playback or dragging moves
+the playhead, `syncTimelineAdjustmentSelection(to:)` activates the
+`TimelineAdjustmentSpanBlock` under the playhead, matching the active-clip behavior on the
+video track, and keeps the adjustment crop overlay visible while the playhead is inside an
+adjustment crop span.
+
 Each `EditorTimelineClip` may also carry its own `MediaTrim`. Timeline trim handles update
 that per-instance trim, the player previews the selected timeline trim, and Split Clip
 creates two timeline instances split at the current player time. `timelineZoom` controls
@@ -160,14 +172,16 @@ timeline clip width and ruler scale without changing media timing.
 Timeline crop now lives in adjustment spans on the `adjustmentLayer`, not on
 `EditorTimelineClip`. Selecting an adjustment span enables the crop overlay in
 `playerPane`; applying the crop at the playhead creates or updates a crop keyframe, and
-timeline playback/export interpolate between those keyframes.
+the overlay interpolates between those keyframes while timeline preview remains full-frame.
+Export applies the active adjustment crop transforms to the output video.
 
 The editor player has two playback paths. When a media-bin clip is selected,
 `playerPane` still uses `PreviewPane` for single-clip preview. When a timeline clip is
 selected, `playerPane` uses `TimelineSequenceVideoView` from `NativeMediaViews.swift` to
-build an in-memory AV composition from the full video timeline. `timelinePlaybackTime`
-stores the sequence playhead time, `timelineSeekRequest` seeks the sequence when a timeline
-block is selected, and `TimelinePlaybackPosition` maps sequence time back to the active
+build an in-memory full-frame AV preview composition from the video timeline.
+`timelinePlaybackTime` stores the sequence playhead time, `timelineSeekRequest` seeks the
+sequence when a timeline block is selected, and `TimelinePlaybackPosition` maps sequence
+time back to the active
 timeline clip and source media time for highlighting, split, and trim behavior.
 
 Phase 4 timeline export is handled by `MediaExport.exportTimeline`. `ContentView` converts

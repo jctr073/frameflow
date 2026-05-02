@@ -765,16 +765,6 @@ struct ContentView: View {
         }
     }
 
-    private var timelinePlaybackAdjustmentSpans: [TimelineAdjustmentSpan] {
-        guard isAdjustmentCropEditing,
-              let selectedAdjustmentSpanID
-        else {
-            return adjustmentSpans
-        }
-
-        return adjustmentSpans.filter { $0.id != selectedAdjustmentSpanID }
-    }
-
     private var isAdjustmentCropEditing: Bool {
         isPlayerCropToolActive && selectedAdjustmentSpan != nil
     }
@@ -822,8 +812,9 @@ struct ContentView: View {
     }
 
     private var activeEditorAppliedCrop: NormalizedCrop {
-        if selectedAdjustmentSpan != nil {
-            return TimelineCropRenderer.activeCrop(in: adjustmentSpans, at: timelinePlaybackTime)
+        if let selectedAdjustmentSpan {
+            let time = min(max(timelinePlaybackTime, selectedAdjustmentSpan.start), selectedAdjustmentSpan.end)
+            return selectedAdjustmentSpan.crop(at: time)
                 ?? adjustmentCropDraft
         }
 
@@ -1168,7 +1159,6 @@ struct ContentView: View {
                     ZStack {
                         TimelineSequenceVideoView(
                             clips: timelinePlaybackClips,
-                            adjustmentSpans: timelinePlaybackAdjustmentSpans,
                             zoomMultiplier: playerZoomMultiplier,
                             fillsFrame: isPlayerFillMode,
                             seekRequest: timelineSeekRequest,
@@ -2576,6 +2566,7 @@ struct ContentView: View {
         }
 
         editorPlayerTime = position.sourceTime
+        syncTimelineAdjustmentSelection(to: position.timelineTime)
         syncAdjustmentCropDraft()
     }
 
@@ -2922,7 +2913,8 @@ struct ContentView: View {
             return
         }
 
-        adjustmentCropDraft = TimelineCropRenderer.activeCrop(in: adjustmentSpans, at: timelinePlaybackTime)
+        let time = min(max(timelinePlaybackTime, selectedAdjustmentSpan.start), selectedAdjustmentSpan.end)
+        adjustmentCropDraft = selectedAdjustmentSpan.crop(at: time)
             ?? selectedAdjustmentSpan.crop(at: selectedAdjustmentSpan.start)
             ?? defaultAdjustmentCrop()
     }
@@ -3023,6 +3015,7 @@ struct ContentView: View {
         timelinePlaybackTime = timelineTime
         timelineSeekRequest = TimelinePlaybackSeekRequest(time: timelineTime)
         syncTimelineSelection(to: timelineTime)
+        syncTimelineAdjustmentSelection(to: timelineTime)
     }
 
     private func syncTimelineSelection(to timelineTime: TimeInterval) {
@@ -3058,6 +3051,40 @@ struct ContentView: View {
             }
 
             cursor = end
+        }
+    }
+
+    private func syncTimelineAdjustmentSelection(to timelineTime: TimeInterval) {
+        let timelineTime = clampedTimelinePlayheadTime(timelineTime)
+        let sortedSpans = adjustmentSpans.sorted { $0.start < $1.start }
+        let activeSpan = sortedSpans.indices.lazy.compactMap { index -> TimelineAdjustmentSpan? in
+            let span = sortedSpans[index]
+            let isLastSpan = index == sortedSpans.index(before: sortedSpans.endIndex)
+            let containsTime =
+                timelineTime >= span.start
+                && (timelineTime < span.end || (isLastSpan && abs(timelineTime - span.end) < 0.000_1))
+            return containsTime ? span : nil
+        }.first
+
+        let activeSpanID = activeSpan?.id
+        let needsOverlayActivation = activeSpan != nil && !isPlayerCropToolActive
+
+        guard selectedAdjustmentSpanID != activeSpanID || needsOverlayActivation else {
+            return
+        }
+
+        selectedAdjustmentSpanID = activeSpanID
+        if activeSpan != nil {
+            selectedEditorClipID = nil
+            isPlayerCropToolActive = true
+            isCropToolActive = false
+            isTrimToolActive = false
+        } else if isPlayerCropToolActive {
+            isPlayerCropToolActive = false
+        }
+
+        if isPlayerCropToolActive {
+            syncAdjustmentCropDraft()
         }
     }
 
