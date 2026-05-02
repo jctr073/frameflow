@@ -9,7 +9,7 @@ enum MainPanelTab: Hashable, Identifiable {
     var title: String {
         switch self {
         case .preview:
-            return "Preview"
+            return "Quick Sort"
         case .videoComposer:
             return "Composer"
         }

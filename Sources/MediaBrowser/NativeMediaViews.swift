@@ -178,6 +178,7 @@ struct NativeVideoView: View {
     var crop = NormalizedCrop.full
     var displaySize: CGSize?
     var trim: MediaTrim?
+    var playbackToggleRequest: PlaybackToggleRequest?
     var onTimeChange: (TimeInterval) -> Void = { _ in }
 
     @StateObject private var controller = NativeVideoController()
@@ -190,8 +191,6 @@ struct NativeVideoView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             NativeVideoControls(controller: controller)
-                .padding(.horizontal, 14)
-                .padding(.bottom, 12)
         }
         .onAppear(perform: loadVideo)
         .onDisappear {
@@ -208,6 +207,10 @@ struct NativeVideoView: View {
         }
         .onChange(of: trim) {
             loadVideo()
+        }
+        .onChange(of: playbackToggleRequest) {
+            guard playbackToggleRequest != nil else { return }
+            controller.togglePlayback()
         }
         .onChange(of: controller.currentTime) {
             onTimeChange(controller.currentTime)
@@ -264,15 +267,16 @@ private struct NativeVideoControls: View {
     @ObservedObject var controller: NativeVideoController
 
     var body: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 6) {
             Button {
                 controller.skip(by: -15)
             } label: {
                 Image(systemName: "gobackward.15")
-                    .font(.system(size: 22, weight: .semibold))
-                    .frame(width: 28, height: 28)
+                    .font(.system(size: 13, weight: .medium))
+                    .frame(width: 22, height: 22)
             }
             .buttonStyle(.plain)
+            .foregroundStyle(theme.primaryText)
             .quickTooltip("Back 15 Seconds", placement: .above)
             .accessibilityLabel("Back 15 Seconds")
 
@@ -280,10 +284,11 @@ private struct NativeVideoControls: View {
                 controller.togglePlayback()
             } label: {
                 Image(systemName: controller.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 22, weight: .semibold))
-                    .frame(width: 28, height: 28)
+                    .font(.system(size: 13, weight: .medium))
+                    .frame(width: 22, height: 22)
             }
             .buttonStyle(.plain)
+            .foregroundStyle(theme.primaryText)
             .quickTooltip(controller.isPlaying ? "Pause Video" : "Play Video", placement: .above)
             .accessibilityLabel(controller.isPlaying ? "Pause Video" : "Play Video")
 
@@ -291,16 +296,22 @@ private struct NativeVideoControls: View {
                 controller.skip(by: 15)
             } label: {
                 Image(systemName: "goforward.15")
-                    .font(.system(size: 22, weight: .semibold))
-                    .frame(width: 28, height: 28)
+                    .font(.system(size: 13, weight: .medium))
+                    .frame(width: 22, height: 22)
             }
             .buttonStyle(.plain)
+            .foregroundStyle(theme.primaryText)
             .quickTooltip("Forward 15 Seconds", placement: .above)
             .accessibilityLabel("Forward 15 Seconds")
 
+            Rectangle()
+                .fill(theme.hairline)
+                .frame(width: 1, height: 16)
+                .padding(.horizontal, 2)
+
             Text(MediaTrim.format(controller.currentTime))
-                .font(.system(size: 15, weight: .semibold, design: .monospaced))
-                .foregroundStyle(theme.playbackSecondaryText)
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundStyle(theme.secondaryText)
                 .lineLimit(1)
                 .quickTooltip("Current Video Time", placement: .above)
                 .accessibilityLabel("Current Video Time")
@@ -318,20 +329,19 @@ private struct NativeVideoControls: View {
             .accessibilityLabel("Seek Video")
 
             Text(MediaTrim.format(controller.playbackEnd))
-                .font(.system(size: 15, weight: .semibold, design: .monospaced))
-                .foregroundStyle(theme.playbackSecondaryText)
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundStyle(theme.secondaryText)
                 .lineLimit(1)
                 .quickTooltip("Video End Time", placement: .above)
                 .accessibilityLabel("Video End Time")
         }
-        .frame(maxWidth: .infinity)
-        .foregroundStyle(.white)
-        .padding(.horizontal, 18)
-        .padding(.vertical, 10)
-        .background(theme.controlBackground, in: RoundedRectangle(cornerRadius: 8))
-        .overlay {
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(theme.controlBorder, lineWidth: 1)
+        .frame(height: 28)
+        .padding(.horizontal, 10)
+        .background(theme.toolbarBackground)
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(theme.hairline)
+                .frame(height: 1)
         }
     }
 }
@@ -348,6 +358,10 @@ struct TimelinePlaybackSeekRequest: Equatable {
     let time: TimeInterval
 }
 
+struct PlaybackToggleRequest: Equatable {
+    let id = UUID()
+}
+
 struct TimelinePlaybackPosition: Equatable {
     let timelineTime: TimeInterval
     let clipID: UUID?
@@ -360,6 +374,7 @@ struct TimelineSequenceVideoView: View {
     let zoomMultiplier: Double
     let fillsFrame: Bool
     let seekRequest: TimelinePlaybackSeekRequest?
+    let playbackToggleRequest: PlaybackToggleRequest?
     let onPlaybackPositionChange: (TimelinePlaybackPosition) -> Void
 
     @StateObject private var controller = TimelineSequenceVideoController()
@@ -385,8 +400,6 @@ struct TimelineSequenceVideoView: View {
             }
 
             TimelineSequenceVideoControls(controller: controller)
-                .padding(.horizontal, 14)
-                .padding(.bottom, 12)
         }
         .onAppear {
             controller.load(clips, seekTime: seekRequest?.time)
@@ -401,6 +414,10 @@ struct TimelineSequenceVideoView: View {
             guard let seekRequest else { return }
             controller.seek(to: seekRequest.time)
         }
+        .onChange(of: playbackToggleRequest) {
+            guard playbackToggleRequest != nil else { return }
+            controller.togglePlayback()
+        }
         .onChange(of: controller.position) {
             onPlaybackPositionChange(controller.position)
         }
@@ -412,15 +429,16 @@ private struct TimelineSequenceVideoControls: View {
     @ObservedObject var controller: TimelineSequenceVideoController
 
     var body: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 6) {
             Button {
                 controller.skip(by: -15)
             } label: {
                 Image(systemName: "gobackward.15")
-                    .font(.system(size: 22, weight: .semibold))
-                    .frame(width: 28, height: 28)
+                    .font(.system(size: 13, weight: .medium))
+                    .frame(width: 22, height: 22)
             }
             .buttonStyle(.plain)
+            .foregroundStyle(theme.primaryText)
             .disabled(controller.duration <= 0)
             .quickTooltip("Back 15 Seconds", placement: .above)
             .accessibilityLabel("Back 15 Seconds")
@@ -429,10 +447,11 @@ private struct TimelineSequenceVideoControls: View {
                 controller.togglePlayback()
             } label: {
                 Image(systemName: controller.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 22, weight: .semibold))
-                    .frame(width: 28, height: 28)
+                    .font(.system(size: 13, weight: .medium))
+                    .frame(width: 22, height: 22)
             }
             .buttonStyle(.plain)
+            .foregroundStyle(theme.primaryText)
             .disabled(controller.duration <= 0)
             .quickTooltip(controller.isPlaying ? "Pause Timeline" : "Play Timeline", placement: .above)
             .accessibilityLabel(controller.isPlaying ? "Pause Timeline" : "Play Timeline")
@@ -441,17 +460,23 @@ private struct TimelineSequenceVideoControls: View {
                 controller.skip(by: 15)
             } label: {
                 Image(systemName: "goforward.15")
-                    .font(.system(size: 22, weight: .semibold))
-                    .frame(width: 28, height: 28)
+                    .font(.system(size: 13, weight: .medium))
+                    .frame(width: 22, height: 22)
             }
             .buttonStyle(.plain)
+            .foregroundStyle(theme.primaryText)
             .disabled(controller.duration <= 0)
             .quickTooltip("Forward 15 Seconds", placement: .above)
             .accessibilityLabel("Forward 15 Seconds")
 
+            Rectangle()
+                .fill(theme.hairline)
+                .frame(width: 1, height: 16)
+                .padding(.horizontal, 2)
+
             Text(MediaTrim.format(controller.currentTime))
-                .font(.system(size: 15, weight: .semibold, design: .monospaced))
-                .foregroundStyle(theme.playbackSecondaryText)
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundStyle(theme.secondaryText)
                 .lineLimit(1)
                 .quickTooltip("Current Timeline Time", placement: .above)
                 .accessibilityLabel("Current Timeline Time")
@@ -470,20 +495,19 @@ private struct TimelineSequenceVideoControls: View {
             .accessibilityLabel("Seek Timeline")
 
             Text(MediaTrim.format(controller.duration))
-                .font(.system(size: 15, weight: .semibold, design: .monospaced))
-                .foregroundStyle(theme.playbackSecondaryText)
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundStyle(theme.secondaryText)
                 .lineLimit(1)
                 .quickTooltip("Timeline Duration", placement: .above)
                 .accessibilityLabel("Timeline Duration")
         }
-        .frame(maxWidth: .infinity)
-        .foregroundStyle(.white)
-        .padding(.horizontal, 18)
-        .padding(.vertical, 10)
-        .background(theme.controlBackground, in: RoundedRectangle(cornerRadius: 8))
-        .overlay {
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(theme.controlBorder, lineWidth: 1)
+        .frame(height: 28)
+        .padding(.horizontal, 10)
+        .background(theme.toolbarBackground)
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(theme.hairline)
+                .frame(height: 1)
         }
     }
 }
@@ -863,6 +887,7 @@ private final class NativeVideoController: ObservableObject {
     private var displaySize: CGSize?
     private var trim: MediaTrim?
     private var loadTask: Task<Void, Never>?
+    private var endObserver: NSObjectProtocol?
     private var boundaryObserver: Any?
     private var timeObserver: Any?
     private var timeControlObservation: NSKeyValueObservation?
@@ -897,6 +922,9 @@ private final class NativeVideoController: ObservableObject {
 
     deinit {
         loadTask?.cancel()
+        if let endObserver {
+            NotificationCenter.default.removeObserver(endObserver)
+        }
     }
 
     func play(_ url: URL, crop: NormalizedCrop, displaySize: CGSize?, trim: MediaTrim?) {
@@ -907,7 +935,7 @@ private final class NativeVideoController: ObservableObject {
                 applyTrim(trim, seekToStart: true)
             }
             if let trim, boundaryObserver == nil {
-                installBoundaryObserver(end: trim.end, start: trim.start)
+                installBoundaryObserver(end: trim.end)
             }
             player.play()
             return
@@ -919,6 +947,7 @@ private final class NativeVideoController: ObservableObject {
         self.trim = trim
 
         loadTask?.cancel()
+        removeEndObserver()
         removeBoundaryObserver()
         let player = player
         loadTask = Task { @MainActor in
@@ -926,12 +955,13 @@ private final class NativeVideoController: ObservableObject {
             guard !Task.isCancelled else { return }
             duration = result.duration
             player.replaceCurrentItem(with: result.item)
+            installEndObserver(for: result.item)
             let start = trim?.start ?? 0
             currentTime = start
             let startTime = CMTime(seconds: start, preferredTimescale: 600)
             await player.seek(to: startTime, toleranceBefore: .zero, toleranceAfter: .zero)
             if let trim {
-                installBoundaryObserver(end: trim.end, start: trim.start)
+                installBoundaryObserver(end: trim.end)
             }
             player.play()
         }
@@ -977,6 +1007,7 @@ private final class NativeVideoController: ObservableObject {
 
     func stop() {
         loadTask?.cancel()
+        removeEndObserver()
         removeBoundaryObserver()
         if let timeObserver {
             player.removeTimeObserver(timeObserver)
@@ -996,7 +1027,7 @@ private final class NativeVideoController: ObservableObject {
         removeBoundaryObserver()
 
         if let trim {
-            installBoundaryObserver(end: trim.end, start: trim.start)
+            installBoundaryObserver(end: trim.end)
             if seekToStart {
                 seek(to: trim.start)
             } else if currentTime < trim.start || currentTime > trim.end {
@@ -1084,16 +1115,14 @@ private final class NativeVideoController: ObservableObject {
     }
 
     @MainActor
-    private func installBoundaryObserver(end: TimeInterval, start: TimeInterval) {
+    private func installBoundaryObserver(end: TimeInterval) {
         removeBoundaryObserver()
         let endTime = CMTime(seconds: end, preferredTimescale: 600)
         boundaryObserver = player.addBoundaryTimeObserver(forTimes: [NSValue(time: endTime)], queue: .main) { [weak self] in
             guard let self else { return }
             Task { @MainActor in
-                currentTime = start
-                let startTime = CMTime(seconds: start, preferredTimescale: 600)
-                player.seek(to: startTime, toleranceBefore: .zero, toleranceAfter: .zero)
-                player.play()
+                self.currentTime = end
+                self.player.pause()
             }
         }
     }
@@ -1103,6 +1132,30 @@ private final class NativeVideoController: ObservableObject {
         if let boundaryObserver {
             player.removeTimeObserver(boundaryObserver)
             self.boundaryObserver = nil
+        }
+    }
+
+    @MainActor
+    private func installEndObserver(for item: AVPlayerItem) {
+        removeEndObserver()
+        endObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: item,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.currentTime = self.playbackEnd
+                self.player.pause()
+            }
+        }
+    }
+
+    @MainActor
+    private func removeEndObserver() {
+        if let endObserver {
+            NotificationCenter.default.removeObserver(endObserver)
+            self.endObserver = nil
         }
     }
 }

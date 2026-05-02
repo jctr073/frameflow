@@ -54,6 +54,8 @@ struct ContentView: View {
     @State private var editorPlayerTime: TimeInterval = 0
     @State private var timelinePlaybackTime: TimeInterval = 0
     @State private var timelineSeekRequest: TimelinePlaybackSeekRequest?
+    @State private var previewPlaybackToggleRequest: PlaybackToggleRequest?
+    @State private var playerPlaybackToggleRequest: PlaybackToggleRequest?
     @State private var playerZoomMultiplier = 1.0
     @State private var isPlayerFillMode = false
     @State private var isTimelineDropTargeted = false
@@ -61,6 +63,8 @@ struct ContentView: View {
     @State private var timelinePlayheadDragStartTime: TimeInterval?
     @State private var isExportingTimeline = false
     @State private var activePanel: SidePanel = .thumbnail
+    @State private var showThumbnailPanel: Bool = true
+    @State private var showPinnedPanel: Bool = true
     @State private var thumbnailSelectionIDs: Set<URL> = []
     @State private var thumbnailSelectionAnchorID: URL?
     @State private var isCopyingPinnedFiles = false
@@ -84,11 +88,13 @@ struct ContentView: View {
     private let timelineBasePixelsPerSecond: CGFloat = 12
     private let timelineRulerHeight: CGFloat = 34
     private let timelineAdjustmentLayerHeight: CGFloat = 44
-    private let timelineVideoTrackHeight: CGFloat = 52
+    private let timelineVideoTrackHeight: CGFloat = 84
     private let timelineTrackHeaderWidth: CGFloat = 64
     private let timelineRulerLabelTrailingPadding: CGFloat = 72
-    private let timelinePlayheadColor = Color(red: 1.0, green: 0.34, blue: 0.0)
-    private let timelinePlayheadHandleSize = CGSize(width: 24, height: 28)
+    private let timelineZoomRange = 0.5...12.0
+    private let timelinePlayheadColor = Color(red: 0.96, green: 0.30, blue: 0.10)
+    private let timelineSelectionOutlineColor = Color(red: 0.86, green: 0.42, blue: 0.08)
+    private let timelinePlayheadHandleSize = CGSize(width: 14, height: 16)
     private let timelinePlayheadHitWidth: CGFloat = 32
 
     init(initialFolderURL: URL?, mainPanelState: MainPanelState) {
@@ -159,11 +165,21 @@ struct ContentView: View {
                 activePanel = .thumbnail
             }
         }
+        .onChange(of: mainPanelState.activeTab) {
+            switch mainPanelState.activeTab {
+            case .preview:
+                showThumbnailPanel = true
+                showPinnedPanel = true
+            case .videoComposer:
+                showThumbnailPanel = false
+                showPinnedPanel = false
+            }
+        }
     }
 
     private var thumbnailPanel: some View {
         VStack(spacing: 0) {
-            panelColumnHeader(title: "Folders", trailing: "\(library.items.count)") {
+            panelHeader {
                 Button {
                     chooseFolder()
                 } label: {
@@ -175,8 +191,10 @@ struct ContentView: View {
                 .keyboardShortcut("o", modifiers: .command)
                 .quickTooltip("Open Folder")
                 .accessibilityLabel("Open Folder")
+
+                headerFilterControl
             }
-            filterControl
+
             thumbnailBatchControl
 
             if visibleThumbnailEntries.isEmpty {
@@ -221,6 +239,10 @@ struct ContentView: View {
                                         addToEditorClips(contextItems)
                                     }
 
+                                    Button(timelineClipMenuTitle(for: contextItems)) {
+                                        addToTimeline(contextItems, activateComposer: false)
+                                    }
+
                                     Button(pinMenuTitle(for: contextItems)) {
                                         pin(contextItems)
                                     }
@@ -231,7 +253,6 @@ struct ContentView: View {
                     .listStyle(.sidebar)
                     .scrollContentBackground(.hidden)
                     .background(theme.panelBackground)
-                    .overlay(panelFocusOverlay(for: .thumbnail))
                     .onChange(of: thumbnailSelectionIDs) {
                         guard let thumbnailSelectionID = primaryThumbnailSelectionID else { return }
                         withAnimation(.snappy(duration: 0.16)) {
@@ -244,15 +265,31 @@ struct ContentView: View {
         .background(theme.panelBackground)
     }
 
+    private func panelHeader<Content: View>(
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        HStack(spacing: 6) {
+            content()
+        }
+        .frame(height: 30)
+        .padding(.horizontal, 10)
+        .foregroundStyle(theme.primaryText)
+        .background(theme.toolbarBackground)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(theme.hairline)
+                .frame(height: 1)
+        }
+    }
+
     private func panelColumnHeader<Actions: View>(
         title: String,
         trailing: String? = nil,
         @ViewBuilder actions: () -> Actions
     ) -> some View {
-        HStack(spacing: 8) {
-            Text(title.uppercased())
-                .font(.system(size: 13, weight: .semibold))
-                .tracking(1.4)
+        panelHeader {
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(theme.secondaryText)
                 .lineLimit(1)
 
@@ -262,19 +299,10 @@ struct ContentView: View {
 
             if let trailing {
                 Text(trailing)
-                    .font(.system(size: 13, weight: .medium, design: .monospaced))
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
                     .foregroundStyle(theme.mutedText)
                     .lineLimit(1)
             }
-        }
-        .frame(height: 40)
-        .padding(.horizontal, 12)
-        .foregroundStyle(theme.primaryText)
-        .background(theme.toolbarBackground)
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(theme.hairline)
-                .frame(height: 1)
         }
     }
 
@@ -480,6 +508,37 @@ struct ContentView: View {
         }
     }
 
+    private var headerFilterControl: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "line.3.horizontal.decrease.circle")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(theme.secondaryText)
+
+            TextField("Filter files", text: $filterText)
+                .textFieldStyle(.plain)
+                .font(.caption)
+                .quickTooltip("Filter Files")
+
+            if !filterText.isEmpty {
+                Button {
+                    filterText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(theme.secondaryText)
+                }
+                .buttonStyle(.plain)
+                .quickTooltip("Clear Filter")
+                .accessibilityLabel("Clear Filter")
+            }
+        }
+        .padding(.horizontal, 8)
+        .frame(maxWidth: .infinity)
+        .frame(height: 22)
+        .foregroundStyle(theme.primaryText)
+        .background(theme.panelBackground, in: RoundedRectangle(cornerRadius: 5))
+    }
+
     private var statusBar: some View {
         HStack(spacing: 12) {
             Button {
@@ -649,6 +708,10 @@ struct ContentView: View {
         return adjustmentSpans.first { $0.id == selectedAdjustmentSpanID }
     }
 
+    private var hasPairedTimelineSelection: Bool {
+        selectedTimelineClipID != nil && selectedAdjustmentSpanID != nil
+    }
+
     private var activeEditorClip: EditorClip? {
         if let timelineClip = selectedTimelineClip,
            let clip = editorClip(for: timelineClip) {
@@ -773,8 +836,39 @@ struct ContentView: View {
         selectedAdjustmentSpan != nil || (selectedTimelineClip == nil && activeEditorClip != nil)
     }
 
+    private var canAddAdjustmentKeyframe: Bool {
+        guard let selectedAdjustmentSpan else { return false }
+        let crop = adjustmentCropDraft.clamped()
+        guard !crop.isFullFrame else { return false }
+        return timelinePlaybackTime >= selectedAdjustmentSpan.start
+            && timelinePlaybackTime <= selectedAdjustmentSpan.end
+    }
+
+    @ViewBuilder
+    private var timelineToolbarSeparator: some View {
+        Rectangle()
+            .fill(theme.hairline)
+            .frame(width: 1, height: 16)
+            .padding(.horizontal, 2)
+    }
+
     private var timelinePixelsPerSecond: CGFloat {
         timelineBasePixelsPerSecond * CGFloat(timelineZoom)
+    }
+
+    private var selectedTimelineDeleteLabel: String {
+        let base: String
+        switch (selectedTimelineClipID, selectedAdjustmentSpanID) {
+        case (.some, .some):
+            base = "Delete Selected Timeline Items"
+        case (.some, .none):
+            base = "Delete Timeline Clip"
+        case (.none, .some):
+            base = "Delete Adjustment Crop"
+        case (.none, .none):
+            base = "Delete Timeline Selection"
+        }
+        return "\(base) (⇧⌫ Ripple)"
     }
 
     private var visibleEditorTabs: [MainPanelTab] {
@@ -917,23 +1011,27 @@ struct ContentView: View {
     private var activeWorkbench: some View {
         switch mainPanelState.activeTab {
         case .preview:
-            mediaWorkbench
+            quickSortWorkbench
         case .videoComposer:
             composerWorkbench
         }
     }
 
-    private var mediaWorkbench: some View {
+    private var quickSortWorkbench: some View {
         HSplitView {
-            thumbnailPanel
-                .frame(minWidth: 150, idealWidth: 190, maxWidth: 240)
+            if showThumbnailPanel {
+                thumbnailPanel
+                    .frame(minWidth: 190, idealWidth: 230, maxWidth: 320)
+            }
 
             previewMainPanel
                 .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
                 .layoutPriority(1)
 
-            pinnedPanel
-                .frame(minWidth: 120, idealWidth: 150, maxWidth: 220)
+            if showPinnedPanel {
+                pinnedPanel
+                    .frame(minWidth: 180, idealWidth: 220, maxWidth: 300)
+            }
         }
         .background(theme.canvasBackground)
     }
@@ -941,18 +1039,22 @@ struct ContentView: View {
     private var composerWorkbench: some View {
         VSplitView {
             HSplitView {
-                thumbnailPanel
-                    .frame(minWidth: 150, idealWidth: 190, maxWidth: 240)
+                if showThumbnailPanel {
+                    thumbnailPanel
+                        .frame(minWidth: 190, idealWidth: 230, maxWidth: 320)
+                }
 
                 clipsPane
-                    .frame(minWidth: 145, idealWidth: 180, maxWidth: 220)
+                    .frame(minWidth: 180, idealWidth: 220, maxWidth: 290)
 
                 playerPane
                     .frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
                     .layoutPriority(1)
 
-                pinnedPanel
-                    .frame(minWidth: 120, idealWidth: 150, maxWidth: 210)
+                if showPinnedPanel {
+                    pinnedPanel
+                        .frame(minWidth: 180, idealWidth: 220, maxWidth: 290)
+                }
             }
             .frame(minHeight: 300, maxHeight: .infinity)
 
@@ -963,7 +1065,57 @@ struct ContentView: View {
     }
 
     private var mainPanelTabBar: some View {
-        HStack(spacing: 18) {
+        ZStack {
+            HStack(spacing: 0) {
+                HStack(spacing: 4) {
+                    Button {
+                        showThumbnailPanel.toggle()
+                    } label: {
+                        Image(systemName: "sidebar.left")
+                            .font(.system(size: 14, weight: .medium))
+                            .frame(width: 28, height: 28)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(showThumbnailPanel ? theme.primaryText : theme.secondaryText)
+                    .quickTooltip(showThumbnailPanel ? "Hide Folders Panel" : "Show Folders Panel")
+                    .accessibilityLabel(showThumbnailPanel ? "Hide Folders Panel" : "Show Folders Panel")
+
+                    Button {
+                        showPinnedPanel.toggle()
+                    } label: {
+                        Image(systemName: "sidebar.right")
+                            .font(.system(size: 14, weight: .medium))
+                            .frame(width: 28, height: 28)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(showPinnedPanel ? theme.primaryText : theme.secondaryText)
+                    .quickTooltip(showPinnedPanel ? "Hide Pinned Panel" : "Show Pinned Panel")
+                    .accessibilityLabel(showPinnedPanel ? "Hide Pinned Panel" : "Show Pinned Panel")
+                }
+
+                Spacer(minLength: 0)
+
+                Button {
+                    exportTimeline()
+                } label: {
+                    if isExportingTimeline {
+                        ProgressView()
+                            .controlSize(.small)
+                            .frame(width: 86, height: 38)
+                    } else {
+                        Text("Export")
+                            .font(.system(size: 14, weight: .bold))
+                            .frame(width: 86, height: 38)
+                    }
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(theme.accentText)
+                .background(theme.accent, in: RoundedRectangle(cornerRadius: 7))
+                .disabled(timelineClips.isEmpty || isExportingTimeline)
+                .quickTooltip("Export Timeline")
+                .accessibilityLabel("Export Timeline")
+            }
+
             HStack(spacing: 0) {
                 ForEach(visibleEditorTabs) { tab in
                     let isActive = mainPanelState.activeTab == tab
@@ -988,28 +1140,6 @@ struct ContentView: View {
                     .accessibilityLabel(tab.title)
                 }
             }
-
-            Spacer(minLength: 0)
-
-            Button {
-                exportTimeline()
-            } label: {
-                if isExportingTimeline {
-                    ProgressView()
-                        .controlSize(.small)
-                        .frame(width: 86, height: 38)
-                } else {
-                    Text("Export")
-                        .font(.system(size: 14, weight: .bold))
-                        .frame(width: 86, height: 38)
-                }
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(theme.accentText)
-            .background(theme.accent, in: RoundedRectangle(cornerRadius: 7))
-            .disabled(timelineClips.isEmpty || isExportingTimeline)
-            .quickTooltip("Export Timeline")
-            .accessibilityLabel("Export Timeline")
         }
         .frame(height: topToolbarHeight)
         .padding(.leading, 16)
@@ -1059,13 +1189,13 @@ struct ContentView: View {
 
     private var clipsPane: some View {
         VStack(spacing: 0) {
-            panelColumnHeader(title: "Project") {
+            panelColumnHeader(title: "Clips") {
                 Button {
                     importEditorClips()
                 } label: {
-                    Label("Add", systemImage: "plus")
-                        .font(.system(size: 12, weight: .bold))
-                        .labelStyle(.titleAndIcon)
+                    Image(systemName: "plus")
+                        .font(.system(size: 13, weight: .bold))
+                        .frame(width: 24, height: 24)
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(theme.accent)
@@ -1150,8 +1280,6 @@ struct ContentView: View {
                     .frame(height: 1)
             }
 
-            playerEditingToolbar
-
             ZStack {
                 theme.windowBackground
 
@@ -1159,17 +1287,20 @@ struct ContentView: View {
                     ZStack {
                         TimelineSequenceVideoView(
                             clips: timelinePlaybackClips,
-                            zoomMultiplier: playerZoomMultiplier,
-                            fillsFrame: isPlayerFillMode,
-                            seekRequest: timelineSeekRequest,
-                            onPlaybackPositionChange: handleTimelinePlaybackPosition
-                        )
+                        zoomMultiplier: playerZoomMultiplier,
+                        fillsFrame: isPlayerFillMode,
+                        seekRequest: timelineSeekRequest,
+                        playbackToggleRequest: playerPlaybackToggleRequest,
+                        onPlaybackPositionChange: handleTimelinePlaybackPosition
+                    )
 
                         if isAdjustmentCropEditing {
                             CropOverlay(
                                 crop: adjustmentCropBinding,
                                 isEditable: true,
-                                onApply: applyActiveEditorCrop
+                                onApply: applyActiveEditorCrop,
+                                outlineColor: timelineSelectionOutlineColor,
+                                usesDashedOutline: false
                             )
                         }
                     }
@@ -1181,6 +1312,7 @@ struct ContentView: View {
                         isCropToolActive: isPlayerCropToolActive,
                         appliedCrop: activeEditorAppliedCrop,
                         appliedTrim: activeTimelineTrimForPreview,
+                        playbackToggleRequest: playerPlaybackToggleRequest,
                         onApplyCrop: applyActiveEditorCrop,
                         onVideoTimeChange: { editorPlayerTime = $0 },
                         crop: activeEditorCropBinding(for: clip.item)
@@ -1234,145 +1366,6 @@ struct ContentView: View {
         }
     }
 
-    private var playerEditingToolbar: some View {
-        HStack(spacing: 4) {
-            Button {
-                snapshotActiveEditorFrame()
-            } label: {
-                if isCapturingSnapshot {
-                    ProgressView()
-                        .controlSize(.small)
-                        .frame(width: 28, height: 26)
-                } else {
-                    Image(systemName: "camera")
-                        .font(.system(size: 14, weight: .medium))
-                        .frame(width: 28, height: 26)
-                }
-            }
-            .buttonStyle(.plain)
-            .disabled(!activeEditorCanSnapshot || isCapturingSnapshot)
-            .quickTooltip("Snapshot Current Frame")
-            .accessibilityLabel("Snapshot Current Frame")
-
-            Button {
-                isPlayerCropToolActive.toggle()
-                if isPlayerCropToolActive {
-                    isCropToolActive = false
-                    isTrimToolActive = false
-                    syncAdjustmentCropDraft()
-                }
-            } label: {
-                Image(systemName: "crop")
-                    .font(.system(size: 14, weight: .medium))
-                    .frame(width: 28, height: 26)
-            }
-            .buttonStyle(.plain)
-            .disabled(!canEditPlayerCrop)
-            .foregroundStyle(isPlayerCropToolActive ? theme.accent : theme.primaryText)
-            .quickTooltip(selectedAdjustmentSpan == nil ? "Crop Tool" : "Adjustment Crop Tool")
-            .accessibilityLabel(selectedAdjustmentSpan == nil ? "Crop Tool" : "Adjustment Crop Tool")
-
-            Menu {
-                Button("Square 1:1") {
-                    applyActiveEditorCropPreset(width: 1, height: 1)
-                }
-                Button("Portrait 4:5") {
-                    applyActiveEditorCropPreset(width: 4, height: 5)
-                }
-                Button("Story/Reel 9:16") {
-                    applyActiveEditorCropPreset(width: 9, height: 16)
-                }
-                Button("Landscape 16:9") {
-                    applyActiveEditorCropPreset(width: 16, height: 9)
-                }
-                Button("Classic 4:3") {
-                    applyActiveEditorCropPreset(width: 4, height: 3)
-                }
-                Button("Open Graph 1.91:1") {
-                    applyActiveEditorCropPreset(width: 1.91, height: 1)
-                }
-            } label: {
-                Image(systemName: "aspectratio")
-                    .font(.system(size: 14, weight: .medium))
-                    .frame(width: 28, height: 26)
-            }
-            .buttonStyle(.plain)
-            .disabled(!canEditPlayerCrop)
-            .quickTooltip("Crop Presets")
-            .accessibilityLabel("Crop Presets")
-
-            Button {
-                clearActiveEditorCrop()
-            } label: {
-                Image(systemName: "arrow.counterclockwise")
-                    .font(.system(size: 13, weight: .medium))
-                    .frame(width: 28, height: 26)
-            }
-            .buttonStyle(.plain)
-            .disabled(!canEditPlayerCrop || (selectedAdjustmentSpan == nil && activeEditorCrop.isFullFrame && activeEditorAppliedCrop.isFullFrame))
-            .quickTooltip(selectedAdjustmentSpan == nil ? "Reset Crop" : "Remove Adjustment Crop")
-            .accessibilityLabel(selectedAdjustmentSpan == nil ? "Reset Crop" : "Remove Adjustment Crop")
-
-            Spacer(minLength: 0)
-
-            HStack(spacing: 2) {
-                Button {
-                    zoomPlayerOut()
-                } label: {
-                    Image(systemName: "minus.magnifyingglass")
-                        .font(.system(size: 13, weight: .medium))
-                        .frame(width: 28, height: 26)
-                }
-                .buttonStyle(.plain)
-                .disabled(!canZoomPlayerPane || playerZoomMultiplier <= playerZoomRange.lowerBound)
-                .quickTooltip("Zoom Out Player")
-                .accessibilityLabel("Zoom Out Player")
-
-                Text(playerZoomPercentageText)
-                    .font(.caption.monospacedDigit().weight(.semibold))
-                    .foregroundStyle(theme.secondaryText)
-                    .lineLimit(1)
-                    .frame(width: 44)
-                    .quickTooltip("Player Zoom")
-                    .accessibilityLabel("Player Zoom")
-
-                Button {
-                    zoomPlayerIn()
-                } label: {
-                    Image(systemName: "plus.magnifyingglass")
-                        .font(.system(size: 13, weight: .medium))
-                        .frame(width: 28, height: 26)
-                }
-                .buttonStyle(.plain)
-                .disabled(!canZoomPlayerPane || playerZoomMultiplier >= playerZoomRange.upperBound)
-                .quickTooltip("Zoom In Player")
-                .accessibilityLabel("Zoom In Player")
-
-                Button {
-                    isPlayerFillMode.toggle()
-                } label: {
-                    Image(systemName: "arrow.up.left.and.arrow.down.right")
-                        .font(.system(size: 13, weight: .medium))
-                        .frame(width: 28, height: 26)
-                }
-                .buttonStyle(.plain)
-                .disabled(!canZoomPlayerPane)
-                .foregroundStyle(isPlayerFillMode ? theme.accent : theme.primaryText)
-                .quickTooltip(isPlayerFillMode ? "Use Fit Player" : "Fill Player")
-                .accessibilityLabel(isPlayerFillMode ? "Use Fit Player" : "Fill Player")
-            }
-        }
-        .frame(height: 34)
-        .padding(.horizontal, 10)
-        .foregroundStyle(theme.primaryText)
-        .background(theme.toolbarBackground)
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(theme.hairline)
-                .frame(height: 1)
-        }
-    }
-
     private var timelinePane: some View {
         VStack(spacing: 0) {
             HStack(spacing: 6) {
@@ -1395,22 +1388,7 @@ struct ContentView: View {
                 .quickTooltip("Export Timeline")
                 .accessibilityLabel("Export Timeline")
 
-                Rectangle()
-                    .fill(theme.hairline)
-                    .frame(width: 1, height: 16)
-
-                Button {
-                    addAdjustmentCropSpan()
-                } label: {
-                    Image(systemName: "rectangle.badge.plus")
-                        .font(.system(size: 13, weight: .medium))
-                        .frame(width: 22, height: 22)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(theme.primaryText)
-                .disabled(actualTimelineDuration <= 0)
-                .quickTooltip("Add Adjustment Crop")
-                .accessibilityLabel("Add Adjustment Crop")
+                timelineToolbarSeparator
 
                 Button {
                     resetSelectedTimelineTrim()
@@ -1448,8 +1426,167 @@ struct ContentView: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(theme.primaryText)
                 .disabled(selectedTimelineClipID == nil && selectedAdjustmentSpanID == nil)
-                .quickTooltip(selectedAdjustmentSpanID == nil ? "Delete Timeline Clip" : "Delete Adjustment Crop")
-                .accessibilityLabel(selectedAdjustmentSpanID == nil ? "Delete Timeline Clip" : "Delete Adjustment Crop")
+                .quickTooltip(selectedTimelineDeleteLabel)
+                .accessibilityLabel(selectedTimelineDeleteLabel)
+
+                timelineToolbarSeparator
+
+                Button {
+                    addAdjustmentCropSpan()
+                } label: {
+                    Image(systemName: "rectangle.badge.plus")
+                        .font(.system(size: 13, weight: .medium))
+                        .frame(width: 22, height: 22)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(theme.primaryText)
+                .disabled(actualTimelineDuration <= 0)
+                .quickTooltip("Add Adjustment Crop")
+                .accessibilityLabel("Add Adjustment Crop")
+
+                Button {
+                    applyAdjustmentCropKeyframe()
+                } label: {
+                    Image(systemName: "diamond.fill")
+                        .font(.system(size: 12, weight: .medium))
+                        .frame(width: 22, height: 22)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(theme.primaryText)
+                .disabled(!canAddAdjustmentKeyframe)
+                .quickTooltip("Add Keyframe")
+                .accessibilityLabel("Add Keyframe")
+
+                Button {
+                    isPlayerCropToolActive.toggle()
+                    if isPlayerCropToolActive {
+                        isCropToolActive = false
+                        isTrimToolActive = false
+                        syncAdjustmentCropDraft()
+                    }
+                } label: {
+                    Image(systemName: "crop")
+                        .font(.system(size: 13, weight: .medium))
+                        .frame(width: 22, height: 22)
+                }
+                .buttonStyle(.plain)
+                .disabled(!canEditPlayerCrop)
+                .foregroundStyle(isPlayerCropToolActive ? theme.accent : theme.primaryText)
+                .quickTooltip(selectedAdjustmentSpan == nil ? "Crop Tool" : "Adjustment Crop Tool")
+                .accessibilityLabel(selectedAdjustmentSpan == nil ? "Crop Tool" : "Adjustment Crop Tool")
+
+                Menu {
+                    Button("Square 1:1") {
+                        applyActiveEditorCropPreset(width: 1, height: 1)
+                    }
+                    Button("Portrait 4:5") {
+                        applyActiveEditorCropPreset(width: 4, height: 5)
+                    }
+                    Button("Story/Reel 9:16") {
+                        applyActiveEditorCropPreset(width: 9, height: 16)
+                    }
+                    Button("Landscape 16:9") {
+                        applyActiveEditorCropPreset(width: 16, height: 9)
+                    }
+                    Button("Classic 4:3") {
+                        applyActiveEditorCropPreset(width: 4, height: 3)
+                    }
+                    Button("Open Graph 1.91:1") {
+                        applyActiveEditorCropPreset(width: 1.91, height: 1)
+                    }
+                } label: {
+                    Image(systemName: "aspectratio")
+                        .font(.system(size: 13, weight: .medium))
+                        .frame(width: 22, height: 22)
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .foregroundStyle(theme.primaryText)
+                .disabled(!canEditPlayerCrop)
+                .quickTooltip("Crop Presets")
+                .accessibilityLabel("Crop Presets")
+
+                Button {
+                    clearActiveEditorCrop()
+                } label: {
+                    Image(systemName: "arrow.counterclockwise")
+                        .font(.system(size: 13, weight: .medium))
+                        .frame(width: 22, height: 22)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(theme.primaryText)
+                .disabled(!canEditPlayerCrop || (selectedAdjustmentSpan == nil && activeEditorCrop.isFullFrame && activeEditorAppliedCrop.isFullFrame))
+                .quickTooltip(selectedAdjustmentSpan == nil ? "Reset Crop" : "Remove Adjustment Crop")
+                .accessibilityLabel(selectedAdjustmentSpan == nil ? "Reset Crop" : "Remove Adjustment Crop")
+
+                timelineToolbarSeparator
+
+                Button {
+                    snapshotActiveEditorFrame()
+                } label: {
+                    if isCapturingSnapshot {
+                        ProgressView()
+                            .controlSize(.small)
+                            .frame(width: 22, height: 22)
+                    } else {
+                        Image(systemName: "camera")
+                            .font(.system(size: 13, weight: .medium))
+                            .frame(width: 22, height: 22)
+                    }
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(theme.primaryText)
+                .disabled(!activeEditorCanSnapshot || isCapturingSnapshot)
+                .quickTooltip("Snapshot Current Frame")
+                .accessibilityLabel("Snapshot Current Frame")
+
+                Button {
+                    zoomPlayerOut()
+                } label: {
+                    Image(systemName: "minus.magnifyingglass")
+                        .font(.system(size: 13, weight: .medium))
+                        .frame(width: 22, height: 22)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(theme.primaryText)
+                .disabled(!canZoomPlayerPane || playerZoomMultiplier <= playerZoomRange.lowerBound)
+                .quickTooltip("Zoom Out Player")
+                .accessibilityLabel("Zoom Out Player")
+
+                Text(playerZoomPercentageText)
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(theme.secondaryText)
+                    .lineLimit(1)
+                    .frame(width: 40)
+                    .quickTooltip("Player Zoom")
+                    .accessibilityLabel("Player Zoom")
+
+                Button {
+                    zoomPlayerIn()
+                } label: {
+                    Image(systemName: "plus.magnifyingglass")
+                        .font(.system(size: 13, weight: .medium))
+                        .frame(width: 22, height: 22)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(theme.primaryText)
+                .disabled(!canZoomPlayerPane || playerZoomMultiplier >= playerZoomRange.upperBound)
+                .quickTooltip("Zoom In Player")
+                .accessibilityLabel("Zoom In Player")
+
+                Button {
+                    isPlayerFillMode.toggle()
+                } label: {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                        .font(.system(size: 13, weight: .medium))
+                        .frame(width: 22, height: 22)
+                }
+                .buttonStyle(.plain)
+                .disabled(!canZoomPlayerPane)
+                .foregroundStyle(isPlayerFillMode ? theme.accent : theme.primaryText)
+                .quickTooltip(isPlayerFillMode ? "Use Fit Player" : "Fill Player")
+                .accessibilityLabel(isPlayerFillMode ? "Use Fit Player" : "Fill Player")
 
                 Spacer(minLength: 0)
 
@@ -1457,7 +1594,7 @@ struct ContentView: View {
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(theme.secondaryText)
 
-                Slider(value: $timelineZoom, in: 0.5...3.0)
+                Slider(value: $timelineZoom, in: timelineZoomRange)
                     .controlSize(.small)
                     .frame(width: 118)
                     .quickTooltip("Timeline Zoom")
@@ -1519,11 +1656,11 @@ struct ContentView: View {
                     let isMajorTick = tick % majorTickStride == 0
 
                     Rectangle()
-                        .fill(theme.secondaryText.opacity(isMajorTick ? 0.68 : 0.34))
-                        .frame(width: 1, height: isMajorTick ? 12 : 5)
+                        .fill(theme.secondaryText.opacity(isMajorTick ? 0.55 : 0.28))
+                        .frame(width: 1, height: isMajorTick ? 9 : 4)
                         .offset(
                             x: timelineTrackHeaderWidth + CGFloat(seconds) * timelinePixelsPerSecond,
-                            y: geometry.size.height - (isMajorTick ? 17 : 10)
+                            y: geometry.size.height - (isMajorTick ? 13 : 8)
                         )
                 }
 
@@ -1531,11 +1668,11 @@ struct ContentView: View {
                     let seconds = TimeInterval(marker) * interval
 
                     Text(MediaTrim.format(seconds))
-                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(theme.mutedText)
+                        .font(.system(size: 10, weight: .regular, design: .monospaced))
+                        .foregroundStyle(theme.secondaryText.opacity(0.78))
                         .lineLimit(1)
                         .fixedSize()
-                        .offset(x: timelineTrackHeaderWidth + CGFloat(seconds) * timelinePixelsPerSecond, y: 3)
+                        .offset(x: timelineTrackHeaderWidth + CGFloat(seconds) * timelinePixelsPerSecond, y: 4)
                 }
             }
             .frame(width: contentWidth, height: geometry.size.height, alignment: .topLeading)
@@ -1563,6 +1700,7 @@ struct ContentView: View {
                         TimelineAdjustmentSpanBlock(
                             span: span,
                             isSelected: selectedAdjustmentSpanID == span.id,
+                            isPaired: hasPairedTimelineSelection,
                             pixelsPerSecond: timelinePixelsPerSecond,
                             onSelect: {
                                 selectAdjustmentSpan(span)
@@ -1578,15 +1716,18 @@ struct ContentView: View {
                             },
                             onDeleteKeyframe: { keyframeID in
                                 deleteAdjustmentKeyframe(keyframeID, from: span)
+                            },
+                            onMoveKeyframe: { keyframeID, proposedTime in
+                                moveAdjustmentKeyframe(keyframeID, in: span.id, proposedTime: proposedTime)
                             }
                         )
                         .frame(
                             width: max(CGFloat(span.duration) * timelinePixelsPerSecond, 18),
-                            height: 30
+                            height: 36
                         )
                         .offset(
                             x: CGFloat(span.start) * timelinePixelsPerSecond,
-                            y: 7
+                            y: 4
                         )
                         .contextMenu {
                             Button("Remove Adjustment Crop") {
@@ -1609,26 +1750,20 @@ struct ContentView: View {
     private func timelinePlayheadOverlay(in size: CGSize) -> some View {
         let clampedTime = clampedTimelinePlayheadTime(timelinePlaybackTime)
         let playheadX = timelineTrackHeaderWidth + CGFloat(clampedTime) * timelinePixelsPerSecond
-        let lineTop = timelinePlayheadHandleSize.height - 4
+        let handleTopOffset: CGFloat = 1
+        let lineTop = handleTopOffset + timelinePlayheadHandleSize.height - 1
 
         return ZStack(alignment: .topLeading) {
             Rectangle()
                 .fill(timelinePlayheadColor)
-                .frame(width: 2, height: max(0, size.height - lineTop))
-                .offset(x: playheadX - 1, y: lineTop)
+                .frame(width: 1.5, height: max(0, size.height - lineTop))
+                .offset(x: playheadX - 0.75, y: lineTop)
                 .allowsHitTesting(false)
 
             TimelinePlayheadHandleShape()
-                .fill(Color.black.opacity(0.20))
-                .overlay {
-                    TimelinePlayheadHandleShape()
-                        .stroke(
-                            timelinePlayheadColor,
-                            style: StrokeStyle(lineWidth: 3, lineJoin: .round)
-                        )
-                }
+                .fill(timelinePlayheadColor)
                 .frame(width: timelinePlayheadHandleSize.width, height: timelinePlayheadHandleSize.height)
-                .offset(x: playheadX - timelinePlayheadHandleSize.width / 2, y: 1)
+                .offset(x: playheadX - timelinePlayheadHandleSize.width / 2, y: handleTopOffset)
                 .allowsHitTesting(false)
 
             Rectangle()
@@ -1696,11 +1831,19 @@ struct ContentView: View {
                         let sourceClip = editorClip(for: clip)
                         let duration = sourceClip?.status?.duration ?? 0
                         let trim = timelineTrim(for: clip, duration: duration)
+                        let gapWidth = max(0, CGFloat(max(0, clip.leadingGap)) * timelinePixelsPerSecond)
+
+                        if gapWidth > 0 {
+                            Color.clear
+                                .frame(width: gapWidth, height: 76)
+                        }
 
                         TimelineClipBlock(
                             sourceClip: sourceClip,
                             thumbnail: sourceClip.flatMap(editorClipThumbnail(for:)),
+                            filmstrip: sourceClip?.filmstrip,
                             isSelected: selectedTimelineClipID == clip.id,
+                            isPaired: hasPairedTimelineSelection,
                             trim: trim,
                             totalDuration: duration,
                             pixelsPerSecond: timelinePixelsPerSecond,
@@ -1708,7 +1851,7 @@ struct ContentView: View {
                                 updateTimelineClipTrim(clip, trim: nextTrim)
                             }
                         )
-                        .frame(width: timelineClipWidth(for: clip), height: 36)
+                        .frame(width: timelineClipWidth(for: clip), height: 76)
                         .contentShape(Rectangle())
                         .opacity(draggingTimelineClipID == clip.id ? 0.72 : 1)
                         .onTapGesture {
@@ -1732,6 +1875,9 @@ struct ContentView: View {
                         .contextMenu {
                             Button("Remove from Timeline") {
                                 removeTimelineClip(clip)
+                            }
+                            Button("Ripple Delete from Timeline") {
+                                removeTimelineClip(clip, ripple: true)
                             }
                         }
                     }
@@ -1958,6 +2104,7 @@ struct ContentView: View {
                     isCropToolActive: isCropToolActive,
                     appliedCrop: selectedAppliedCrop,
                     appliedTrim: selectedPreviewTrim,
+                    playbackToggleRequest: previewPlaybackToggleRequest,
                     onApplyCrop: applySelectedCrop,
                     onVideoTimeChange: { previewVideoTime = $0 },
                     crop: cropBinding(for: item)
@@ -2033,6 +2180,38 @@ struct ContentView: View {
     }
 
     private func handleKeyDown(_ event: NSEvent) -> Bool {
+        if event.keyCode == 49,
+           !isTextInputFocused,
+           !event.modifierFlags.contains(.command),
+           !event.modifierFlags.contains(.control),
+           !event.modifierFlags.contains(.option) {
+            return toggleActivePlayback()
+        }
+
+        if canAddAdjustmentKeyframe,
+           !isTextInputFocused,
+           mainPanelState.activeTab == .videoComposer {
+            switch event.keyCode {
+            case 36, 76:
+                applyAdjustmentCropKeyframe()
+                return true
+            case 123:
+                nudgeAdjustmentCrop(x: -adjustmentCropKeyboardStep(for: event), y: 0)
+                return true
+            case 124:
+                nudgeAdjustmentCrop(x: adjustmentCropKeyboardStep(for: event), y: 0)
+                return true
+            case 125:
+                nudgeAdjustmentCrop(x: 0, y: adjustmentCropKeyboardStep(for: event))
+                return true
+            case 126:
+                nudgeAdjustmentCrop(x: 0, y: -adjustmentCropKeyboardStep(for: event))
+                return true
+            default:
+                break
+            }
+        }
+
         if selectedCanTrim,
            isTrimToolActive || !selectedTrim.isFullLength(for: selectedStatus.duration) {
             switch event.keyCode {
@@ -2084,7 +2263,7 @@ struct ContentView: View {
            selectedTimelineClipID != nil || selectedAdjustmentSpanID != nil {
             switch event.keyCode {
             case 51, 117:
-                removeSelectedTimelineSelection()
+                removeSelectedTimelineSelection(ripple: event.modifierFlags.contains(.shift))
                 return true
             default:
                 break
@@ -2123,6 +2302,51 @@ struct ContentView: View {
         default:
             return false
         }
+    }
+
+    private var isTextInputFocused: Bool {
+        guard let firstResponder = NSApp.keyWindow?.firstResponder else {
+            return false
+        }
+
+        return firstResponder is NSTextView || firstResponder is NSTextField
+    }
+
+    private func toggleActivePlayback() -> Bool {
+        switch mainPanelState.activeTab {
+        case .preview:
+            guard selectedItem?.kind == .video, !isCropToolActive else {
+                return false
+            }
+            previewPlaybackToggleRequest = PlaybackToggleRequest()
+            return true
+        case .videoComposer:
+            if isShowingTimelinePlayback && (selectedAdjustmentSpan != nil || !isPlayerCropToolActive) {
+                guard !timelinePlaybackClips.isEmpty else { return false }
+                playerPlaybackToggleRequest = PlaybackToggleRequest()
+                return true
+            }
+
+            guard activeEditorClip?.item.kind == .video, !isPlayerCropToolActive else {
+                return false
+            }
+            playerPlaybackToggleRequest = PlaybackToggleRequest()
+            return true
+        }
+    }
+
+    private func adjustmentCropKeyboardStep(for event: NSEvent) -> CGFloat {
+        event.modifierFlags.contains(.option) ? 0.025 : 0.005
+    }
+
+    private func nudgeAdjustmentCrop(x deltaX: CGFloat, y deltaY: CGFloat) {
+        let crop = adjustmentCropDraft.clamped()
+        updateAdjustmentCropDraft(NormalizedCrop(
+            x: crop.x + deltaX,
+            y: crop.y + deltaY,
+            width: crop.width,
+            height: crop.height
+        ).clamped())
     }
 
     private func zoomIn() {
@@ -2195,10 +2419,7 @@ struct ContentView: View {
 
     private func applyActiveEditorCropPreset(width: CGFloat, height: CGFloat) {
         if selectedAdjustmentSpan != nil {
-            let crop = NormalizedCrop.centered(
-                aspectRatio: width / height,
-                naturalSize: CGSize(width: 16, height: 9)
-            )
+            let crop = adjustmentCropPreset(width: width, height: height)
             updateAdjustmentCropDraft(crop)
             isPlayerCropToolActive = true
             isCropToolActive = false
@@ -2511,17 +2732,45 @@ struct ContentView: View {
         selectedAdjustmentSpanID = nil
 
         for item in items {
-            if !editorClips.contains(where: { $0.id == item.id }) {
-                editorClips.append(EditorClip(
-                    item: item,
-                    thumbnail: library.thumbnails[item.url],
-                    status: item.id == selectedItem?.id ? selectedStatus : nil
-                ))
-            }
+            ensureEditorClip(for: item)
         }
         selectedEditorClipID = items.last?.id
 
         mainPanelState.show(.videoComposer)
+    }
+
+    private func addToTimeline(_ items: [MediaItem], activateComposer: Bool) {
+        guard !items.isEmpty else { return }
+
+        mainPanelState.show(.videoComposer, activate: activateComposer)
+
+        var clipsToLoad: [EditorClip] = []
+        for item in items {
+            let sourceClipID = ensureEditorClip(for: item)
+            if let clip = editorClips.first(where: { $0.id == sourceClipID }) {
+                clipsToLoad.append(clip)
+            }
+            addTimelineClip(sourceClipID: sourceClipID)
+        }
+
+        for clip in clipsToLoad {
+            Task {
+                await loadEditorClipMetadataIfNeeded(for: clip)
+            }
+        }
+    }
+
+    @discardableResult
+    private func ensureEditorClip(for item: MediaItem) -> EditorClip.ID {
+        if !editorClips.contains(where: { $0.id == item.id }) {
+            editorClips.append(EditorClip(
+                item: item,
+                thumbnail: library.thumbnails[item.url],
+                status: item.id == selectedItem?.id ? selectedStatus : nil
+            ))
+        }
+
+        return item.id
     }
 
     private func addTimelineClip(sourceClipID: EditorClip.ID) {
@@ -2535,10 +2784,19 @@ struct ContentView: View {
     }
 
     private func selectTimelineClip(_ timelineClip: EditorTimelineClip) {
+        let shouldKeepAdjustmentSelection = selectedAdjustmentSpan.map { span in
+            adjustmentSpan(span, overlaps: timelineClip)
+        } ?? false
+
         selectedTimelineClipID = timelineClip.id
         selectedEditorClipID = nil
-        selectedAdjustmentSpanID = nil
-        isPlayerCropToolActive = false
+
+        if shouldKeepAdjustmentSelection {
+            isPlayerCropToolActive = true
+        } else {
+            selectedAdjustmentSpanID = nil
+            isPlayerCropToolActive = false
+        }
 
         let timelineStart = timelineStartTime(for: timelineClip)
         timelinePlaybackTime = timelineStart
@@ -2548,6 +2806,10 @@ struct ContentView: View {
             editorPlayerTime = timelineTrim(for: timelineClip, duration: duration).start
         } else {
             editorPlayerTime = 0
+        }
+
+        if shouldKeepAdjustmentSelection {
+            syncAdjustmentCropDraft()
         }
     }
 
@@ -2682,7 +2944,7 @@ struct ContentView: View {
 
     private var actualTimelineDuration: TimeInterval {
         timelineClips.reduce(TimeInterval(0)) { total, clip in
-            total + timelineDuration(for: clip)
+            total + max(0, clip.leadingGap) + timelineDuration(for: clip)
         }
     }
 
@@ -2729,7 +2991,17 @@ struct ContentView: View {
     }
 
     private func timelineClipWidth(for clip: EditorTimelineClip) -> CGFloat {
-        min(max(CGFloat(timelineDuration(for: clip)) * timelinePixelsPerSecond, 18), 900)
+        max(CGFloat(timelineDuration(for: clip)) * timelinePixelsPerSecond, 18)
+    }
+
+    private func timelineRange(for clip: EditorTimelineClip) -> MediaTrim {
+        let start = timelineStartTime(for: clip)
+        return MediaTrim(start: start, end: start + timelineDuration(for: clip))
+    }
+
+    private func adjustmentSpan(_ span: TimelineAdjustmentSpan, overlaps clip: EditorTimelineClip) -> Bool {
+        let clipRange = timelineRange(for: clip)
+        return span.start < clipRange.end && span.end > clipRange.start
     }
 
     private func selectAdjustmentSpan(_ span: TimelineAdjustmentSpan) {
@@ -2833,6 +3105,25 @@ struct ContentView: View {
             selectedAdjustmentSpanID = nil
             adjustmentCropDraft = defaultAdjustmentCrop()
             isPlayerCropToolActive = false
+        }
+    }
+
+    private func moveAdjustmentKeyframe(
+        _ keyframeID: TimelineCropKeyframe.ID,
+        in spanID: TimelineAdjustmentSpan.ID,
+        proposedTime: TimeInterval
+    ) {
+        guard let spanIndex = adjustmentSpans.firstIndex(where: { $0.id == spanID }) else { return }
+        var span = adjustmentSpans[spanIndex]
+        guard let keyframeIndex = span.keyframes.firstIndex(where: { $0.id == keyframeID }) else { return }
+
+        let clampedTime = min(max(proposedTime, span.start), span.end)
+        span.keyframes[keyframeIndex].time = clampedTime
+        span.keyframes.sort { $0.time < $1.time }
+        adjustmentSpans[spanIndex] = span
+
+        if selectedAdjustmentSpanID == span.id {
+            syncAdjustmentCropDraft()
         }
     }
 
@@ -2940,11 +3231,26 @@ struct ContentView: View {
     }
 
     private func defaultAdjustmentCrop() -> NormalizedCrop {
-        if !adjustmentCropDraft.isFullFrame {
-            return adjustmentCropDraft
+        adjustmentCropPreset(width: 9, height: 16)
+    }
+
+    private func adjustmentCropPreset(width: CGFloat, height: CGFloat) -> NormalizedCrop {
+        NormalizedCrop.centered(
+            aspectRatio: width / height,
+            naturalSize: adjustmentCropReferenceSize
+        )
+    }
+
+    private var adjustmentCropReferenceSize: CGSize {
+        for timelineClip in timelineClips {
+            if let size = editorClip(for: timelineClip)?.status?.size,
+               size.width > 0,
+               size.height > 0 {
+                return size
+            }
         }
 
-        return NormalizedCrop(x: 0.25, y: 0, width: 0.5, height: 1).clamped()
+        return CGSize(width: 16, height: 9)
     }
 
     private func newAdjustmentSpanRange() -> MediaTrim? {
@@ -3091,6 +3397,7 @@ struct ContentView: View {
     private func timelineStartTime(for targetClip: EditorTimelineClip) -> TimeInterval {
         var cursor = TimeInterval(0)
         for clip in timelineClips {
+            cursor += max(0, clip.leadingGap)
             if clip.id == targetClip.id {
                 return cursor
             }
@@ -3186,16 +3493,79 @@ struct ContentView: View {
             return
         }
 
+        let splitTimelineTime = timelineStartTime(for: selectedTimelineClip) + (splitTime - trim.start)
+
         timelineClips[index].trim = MediaTrim(start: trim.start, end: splitTime).clamped(to: duration)
         let rightClip = EditorTimelineClip(
             sourceClipID: selectedTimelineClip.sourceClipID,
             trim: MediaTrim(start: splitTime, end: trim.end).clamped(to: duration)
         )
         timelineClips.insert(rightClip, at: timelineClips.index(after: index))
+        splitAdjustmentSpans(at: splitTimelineTime)
         selectTimelineClip(rightClip)
         editorPlayerTime = splitTime
         timelinePlaybackTime = timelineStartTime(for: rightClip)
         timelineSeekRequest = TimelinePlaybackSeekRequest(time: timelinePlaybackTime)
+    }
+
+    private func splitAdjustmentSpans(at splitTimelineTime: TimeInterval) {
+        let tolerance = TimelineAdjustmentSpan.keyframeMergeTolerance
+        var nextSpans: [TimelineAdjustmentSpan] = []
+        var didSplit = false
+
+        for span in adjustmentSpans {
+            guard span.start + tolerance < splitTimelineTime,
+                  span.end - tolerance > splitTimelineTime
+            else {
+                nextSpans.append(span)
+                continue
+            }
+
+            let cropAtSplit = span.crop(at: splitTimelineTime) ?? defaultAdjustmentCrop()
+            let leftKeyframes = span.keyframes.filter { $0.time < splitTimelineTime - tolerance }
+            let rightKeyframes = span.keyframes.filter { $0.time > splitTimelineTime + tolerance }
+
+            var left = TimelineAdjustmentSpan(
+                start: span.start,
+                end: splitTimelineTime,
+                keyframes: leftKeyframes
+            )
+            var right = TimelineAdjustmentSpan(
+                start: splitTimelineTime,
+                end: span.end,
+                keyframes: rightKeyframes
+            )
+
+            if (left.keyframes.last?.time ?? -.infinity) < splitTimelineTime - tolerance {
+                left.keyframes.append(TimelineCropKeyframe(time: splitTimelineTime, crop: cropAtSplit))
+            }
+            if (right.keyframes.first?.time ?? .infinity) > splitTimelineTime + tolerance {
+                right.keyframes.insert(
+                    TimelineCropKeyframe(time: splitTimelineTime, crop: cropAtSplit),
+                    at: 0
+                )
+            }
+
+            if left.duration >= TimelineAdjustmentSpan.minimumDuration {
+                nextSpans.append(left)
+            }
+            if right.duration >= TimelineAdjustmentSpan.minimumDuration {
+                nextSpans.append(right)
+            }
+            didSplit = true
+        }
+
+        guard didSplit else { return }
+
+        nextSpans.sort { $0.start < $1.start }
+        adjustmentSpans = nextSpans
+
+        if let selectedID = selectedAdjustmentSpanID,
+           !adjustmentSpans.contains(where: { $0.id == selectedID }) {
+            selectedAdjustmentSpanID = nil
+            adjustmentCropDraft = defaultAdjustmentCrop()
+            isPlayerCropToolActive = false
+        }
     }
 
     private func activeEditorPreviewID(for clip: EditorClip) -> String {
@@ -3290,13 +3660,29 @@ struct ContentView: View {
         timelineSeekRequest = TimelinePlaybackSeekRequest(time: timelineTime)
     }
 
-    private func removeTimelineClip(_ clip: EditorTimelineClip) {
-        let removedIndex = timelineClips.firstIndex { $0.id == clip.id }
-        timelineClips.removeAll { $0.id == clip.id }
+    private func removeTimelineClip(_ clip: EditorTimelineClip, ripple: Bool = false) {
+        guard let removedIndex = timelineClips.firstIndex(where: { $0.id == clip.id }) else {
+            return
+        }
+
+        let removedClip = timelineClips[removedIndex]
+        let removedDuration = timelineDuration(for: removedClip)
+        let removedLeadingGap = max(0, removedClip.leadingGap)
+        let removedClipStart = timelineStartTime(for: removedClip)
+        let removedSpan = removedLeadingGap + removedDuration
+
+        timelineClips.remove(at: removedIndex)
+
+        if ripple {
+            shiftAdjustmentSpansLeft(after: removedClipStart, by: removedSpan)
+        } else if removedIndex < timelineClips.count {
+            timelineClips[removedIndex].leadingGap += removedSpan
+        }
+
         clampAdjustmentSpansToTimeline()
 
         if selectedTimelineClipID == clip.id {
-            if let removedIndex, !timelineClips.isEmpty {
+            if !timelineClips.isEmpty {
                 let nextIndex = min(removedIndex, timelineClips.index(before: timelineClips.endIndex))
                 selectTimelineClip(timelineClips[nextIndex])
             } else {
@@ -3307,21 +3693,41 @@ struct ContentView: View {
         }
     }
 
-    private func removeSelectedTimelineClip() {
-        guard let selectedTimelineClip else {
-            return
-        }
+    private func shiftAdjustmentSpansLeft(after referenceTime: TimeInterval, by amount: TimeInterval) {
+        guard amount > 0 else { return }
+        let tolerance = TimelineAdjustmentSpan.keyframeMergeTolerance
 
-        removeTimelineClip(selectedTimelineClip)
+        adjustmentSpans = adjustmentSpans.map { span in
+            guard span.start >= referenceTime - tolerance else { return span }
+            let newStart = max(0, span.start - amount)
+            let newEnd = max(newStart, span.end - amount)
+            let shiftedKeyframes = span.keyframes.map { keyframe in
+                TimelineCropKeyframe(
+                    id: keyframe.id,
+                    time: max(0, keyframe.time - amount),
+                    crop: keyframe.crop
+                )
+            }
+            return TimelineAdjustmentSpan(
+                id: span.id,
+                start: newStart,
+                end: newEnd,
+                keyframes: shiftedKeyframes
+            )
+        }
     }
 
-    private func removeSelectedTimelineSelection() {
-        if let selectedAdjustmentSpan {
-            removeAdjustmentSpan(selectedAdjustmentSpan)
-            return
+    private func removeSelectedTimelineSelection(ripple: Bool = false) {
+        let spanToRemove = selectedAdjustmentSpan
+        let clipToRemove = selectedTimelineClip
+
+        if let spanToRemove {
+            removeAdjustmentSpan(spanToRemove)
         }
 
-        removeSelectedTimelineClip()
+        if let clipToRemove {
+            removeTimelineClip(clipToRemove, ripple: ripple)
+        }
     }
 
     private func exportTimeline() {
@@ -3414,6 +3820,17 @@ struct ContentView: View {
         }
         editorClips[currentIndex].thumbnail = thumbnail
         editorClips[currentIndex].status = status
+
+        if editorClips[currentIndex].filmstrip == nil,
+           clip.item.kind == .video,
+           let duration = status?.duration,
+           duration > 0 {
+            let url = clip.item.url
+            if let filmstrip = await MediaFilmstrip.generate(for: url, duration: duration),
+               let updateIndex = editorClips.firstIndex(where: { $0.id == clip.id }) {
+                editorClips[updateIndex].filmstrip = filmstrip
+            }
+        }
     }
 
     private func pin(_ item: MediaItem, crop: NormalizedCrop? = nil, trim: MediaTrim? = nil) {
@@ -3623,6 +4040,14 @@ struct ContentView: View {
         return allInClips ? "Show in Clips" : "Add \(items.count) to Clips"
     }
 
+    private func timelineClipMenuTitle(for items: [MediaItem]) -> String {
+        guard items.count > 1 else {
+            return "Add to Timeline"
+        }
+
+        return "Add \(items.count) to Timeline"
+    }
+
     private func thumbnailContextItems(for item: MediaItem) -> [MediaItem] {
         let selectedItems = selectedThumbnailItems
         if selectedItems.count > 1,
@@ -3796,7 +4221,7 @@ private extension MainPanelTab {
     var editorTabTitle: String {
         switch self {
         case .preview:
-            return "Media"
+            return "Quick Sort"
         case .videoComposer:
             return "Composer"
         }
@@ -3808,6 +4233,7 @@ private struct EditorClip: Identifiable {
     let item: MediaItem
     var thumbnail: NSImage?
     var status: MediaStatus?
+    var filmstrip: [NSImage]?
 }
 
 private struct EditorTimelineClip: Identifiable, Hashable {
@@ -3815,6 +4241,7 @@ private struct EditorTimelineClip: Identifiable, Hashable {
     let sourceClipID: EditorClip.ID
     var trim: MediaTrim? = nil
     var adjustments = EditorTimelineAdjustments()
+    var leadingGap: TimeInterval = 0
 }
 
 private struct EditorTimelineAdjustments: Hashable {
@@ -4165,8 +4592,12 @@ private struct EditorClipCard: View {
     let thumbnail: NSImage?
     let isSelected: Bool
 
+    private let cornerRadius: CGFloat = 4
+    private let labelHeight: CGFloat = 22
+    private let selectionOutlineColor = Color(red: 0.86, green: 0.42, blue: 0.08)
+
     var body: some View {
-        VStack(spacing: 5) {
+        VStack(spacing: 0) {
             ZStack(alignment: .bottomTrailing) {
                 Group {
                     if let thumbnail {
@@ -4181,11 +4612,8 @@ private struct EditorClipCard: View {
                 }
                 .frame(height: 64)
                 .frame(maxWidth: .infinity)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .background {
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(theme.thumbnailWell)
-                }
+                .background(theme.thumbnailWell)
+                .clipped()
 
                 Text(durationBadge)
                     .font(.system(size: 9, weight: .semibold, design: .monospaced))
@@ -4197,21 +4625,22 @@ private struct EditorClipCard: View {
             }
 
             Text(clip.item.fileName)
-                .font(.caption2)
-                .foregroundStyle(theme.secondaryText)
-                .lineLimit(2)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.white)
+                .lineLimit(1)
                 .truncationMode(.middle)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 6)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(height: labelHeight)
+                .background(isSelected ? theme.clipBlueSelected : theme.clipBlue)
         }
-        .padding(5)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(isSelected ? theme.panelRaised : Color.clear)
-        )
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
         .overlay {
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(isSelected ? theme.accent : theme.hairline, lineWidth: isSelected ? 2 : 1)
+            RoundedRectangle(cornerRadius: cornerRadius)
+                .stroke(
+                    isSelected ? selectionOutlineColor : Color.white.opacity(0.18),
+                    lineWidth: isSelected ? 2 : 1
+                )
         }
     }
 
@@ -4286,61 +4715,94 @@ private struct TimelineAdjustmentSpanBlock: View {
     @Environment(\.editorTheme) private var theme
     let span: TimelineAdjustmentSpan
     let isSelected: Bool
+    let isPaired: Bool
     let pixelsPerSecond: CGFloat
     let onSelect: () -> Void
     let onMove: (TimeInterval) -> Void
     let onResizeStart: (TimeInterval) -> Void
     let onResizeEnd: (TimeInterval) -> Void
     let onDeleteKeyframe: (TimelineCropKeyframe.ID) -> Void
+    let onMoveKeyframe: (TimelineCropKeyframe.ID, TimeInterval) -> Void
 
     @State private var dragStartTime: TimeInterval?
     @State private var activeHandle: SpanHandle?
+    @State private var keyframeDragStartTime: TimeInterval?
+    @State private var draggingKeyframeID: TimelineCropKeyframe.ID?
+
+    private let cornerRadius: CGFloat = 4
+    private let labelHeight: CGFloat = 16
+    private let yellowFill = Color(red: 0.96, green: 0.78, blue: 0.18)
+    private let yellowFillSelected = Color(red: 1.00, green: 0.86, blue: 0.30)
+    private let yellowLabel = Color(red: 0.88, green: 0.66, blue: 0.10)
+    private let yellowLabelSelected = Color(red: 0.96, green: 0.74, blue: 0.14)
+    private let selectionOutlineColor = Color(red: 0.86, green: 0.42, blue: 0.08)
+    private let pairedOutlineColor = Color(red: 1.00, green: 0.62, blue: 0.10)
 
     var body: some View {
         GeometryReader { geometry in
             let width = geometry.size.width
+            let height = geometry.size.height
+            let showsLabel = width >= 30 && height > labelHeight + 10
+            let contentHeight = max(0, height - (showsLabel ? labelHeight : 0))
 
-            ZStack(alignment: .leading) {
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(isSelected ? theme.accent.opacity(0.78) : theme.accent.opacity(0.42))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 6)
-                            .stroke(isSelected ? Color.white.opacity(0.88) : theme.accent.opacity(0.75), lineWidth: isSelected ? 2 : 1)
-                    }
+            VStack(spacing: 0) {
+                ZStack(alignment: .leading) {
+                    Rectangle()
+                        .fill(isSelected ? yellowFillSelected : yellowFill)
 
-                HStack(spacing: 5) {
-                    Image(systemName: "crop")
-                        .font(.system(size: 10, weight: .bold))
-
-                    if width >= 74 {
-                        Text(MediaTrim.format(span.duration))
-                            .font(.system(size: 10, weight: .bold, design: .monospaced))
-                            .lineLimit(1)
-                    }
-                }
-                .foregroundStyle(isSelected ? Color.black.opacity(0.82) : Color.white.opacity(0.86))
-                .padding(.horizontal, 7)
-                .allowsHitTesting(false)
-
-                ForEach(span.sortedKeyframes) { keyframe in
-                    Circle()
-                        .fill(Color.white)
-                        .stroke(Color.black.opacity(0.35), lineWidth: 1)
-                        .frame(width: 7, height: 7)
-                        .frame(width: 16, height: 16)
-                        .contentShape(Rectangle())
-                        .offset(
-                            x: keyframeOffset(keyframe, width: width) - 8,
-                            y: 16
-                        )
-                        .contextMenu {
-                            Button("Delete Keyframe") {
-                                onDeleteKeyframe(keyframe.id)
+                    ForEach(span.sortedKeyframes) { keyframe in
+                        Diamond()
+                            .fill(Color.white)
+                            .overlay {
+                                Diamond()
+                                    .stroke(
+                                        draggingKeyframeID == keyframe.id ? theme.accent : Color.black.opacity(0.45),
+                                        lineWidth: draggingKeyframeID == keyframe.id ? 1.5 : 1
+                                    )
                             }
-                        }
-                        .quickTooltip("Crop Keyframe")
-                        .accessibilityLabel("Crop Keyframe")
+                            .frame(width: 9, height: 9)
+                            .frame(width: 18, height: contentHeight)
+                            .contentShape(Rectangle())
+                            .offset(x: keyframeOffset(keyframe, width: width) - 9)
+                            .highPriorityGesture(keyframeDragGesture(for: keyframe))
+                            .contextMenu {
+                                Button("Delete Keyframe") {
+                                    onDeleteKeyframe(keyframe.id)
+                                }
+                            }
+                            .quickTooltip("Crop Keyframe")
+                            .accessibilityLabel("Crop Keyframe")
+                    }
                 }
+                .frame(height: contentHeight)
+                .clipped()
+
+                if showsLabel {
+                    HStack(spacing: 4) {
+                        Image(systemName: "crop")
+                            .font(.system(size: 9, weight: .bold))
+
+                        if width >= 70 {
+                            Text(MediaTrim.format(span.duration))
+                                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                                .lineLimit(1)
+                        }
+                    }
+                    .foregroundStyle(Color.black.opacity(0.78))
+                    .padding(.horizontal, 6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(height: labelHeight)
+                    .background(isSelected ? yellowLabelSelected : yellowLabel)
+                    .allowsHitTesting(false)
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+            .overlay {
+                RoundedRectangle(cornerRadius: cornerRadius)
+                    .stroke(
+                        isSelected ? (isPaired ? pairedOutlineColor : selectionOutlineColor) : Color.white.opacity(0.18),
+                        lineWidth: isSelected ? (isPaired ? 3 : 2) : 1
+                    )
             }
             .contentShape(Rectangle())
             .onTapGesture(perform: onSelect)
@@ -4372,15 +4834,40 @@ private struct TimelineAdjustmentSpanBlock: View {
             }
     }
 
+    private func keyframeDragGesture(for keyframe: TimelineCropKeyframe) -> some Gesture {
+        DragGesture(minimumDistance: 1)
+            .onChanged { value in
+                let startTime = keyframeDragStartTime ?? keyframe.time
+                keyframeDragStartTime = startTime
+                draggingKeyframeID = keyframe.id
+                let delta = TimeInterval(value.translation.width / max(pixelsPerSecond, 1))
+                onMoveKeyframe(keyframe.id, startTime + delta)
+            }
+            .onEnded { _ in
+                keyframeDragStartTime = nil
+                draggingKeyframeID = nil
+            }
+    }
+
     private func resizeHandle(_ handle: SpanHandle) -> some View {
-        Rectangle()
-            .fill(activeHandle == handle ? Color.white : Color.white.opacity(0.82))
-            .frame(width: 6)
-            .padding(.vertical, 4)
-            .shadow(color: .black.opacity(0.22), radius: 2)
-            .gesture(resizeGesture(handle))
-            .quickTooltip(handle == .leading ? "Adjustment Start" : "Adjustment End")
-            .accessibilityLabel(handle == .leading ? "Adjustment Start" : "Adjustment End")
+        let active = activeHandle == handle
+        let baseColor: Color = isSelected
+            ? (isPaired ? pairedOutlineColor : selectionOutlineColor)
+            : Color.black.opacity(0.32)
+        return ZStack {
+            RoundedRectangle(cornerRadius: 1.5)
+                .fill(baseColor.opacity(active ? 1.0 : 0.92))
+            Capsule()
+                .fill(Color.white.opacity(active ? 0.85 : 0.55))
+                .frame(width: 1.5, height: 10)
+        }
+        .frame(width: 5)
+        .padding(.vertical, 4)
+        .padding(.horizontal, 1)
+        .contentShape(Rectangle())
+        .gesture(resizeGesture(handle))
+        .quickTooltip(handle == .leading ? "Adjustment Start" : "Adjustment End")
+        .accessibilityLabel(handle == .leading ? "Adjustment Start" : "Adjustment End")
     }
 
     private func resizeGesture(_ handle: SpanHandle) -> some Gesture {
@@ -4411,11 +4898,25 @@ private struct TimelineAdjustmentSpanBlock: View {
     }
 }
 
+private struct Diamond: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.midX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
+        path.addLine(to: CGPoint(x: rect.midX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.midY))
+        path.closeSubpath()
+        return path
+    }
+}
+
 private struct TimelineClipBlock: View {
     @Environment(\.editorTheme) private var theme
     let sourceClip: EditorClip?
     let thumbnail: NSImage?
+    let filmstrip: [NSImage]?
     let isSelected: Bool
+    let isPaired: Bool
     let trim: MediaTrim
     let totalDuration: TimeInterval
     let pixelsPerSecond: CGFloat
@@ -4424,57 +4925,74 @@ private struct TimelineClipBlock: View {
     @State private var activeTrimHandle: TimelineTrimHandle?
     @State private var trimDragStart: MediaTrim?
 
+    private let cornerRadius: CGFloat = 4
+    private let labelHeight: CGFloat = 20
+    private let selectionOutlineColor = Color(red: 0.86, green: 0.42, blue: 0.08)
+    private let pairedOutlineColor = Color(red: 1.00, green: 0.62, blue: 0.10)
+
     var body: some View {
         GeometryReader { geometry in
             let width = geometry.size.width
-            let showsThumbnail = width >= 26
-            let showsDetails = width >= 68
-            let horizontalPadding: CGFloat = width < 42 ? 2 : 5
-            let thumbnailWidth = min(38, max(16, width * 0.40))
+            let height = geometry.size.height
+            let showsLabel = width >= 36 && height > labelHeight + 12
+            let thumbnailHeight = max(0, height - (showsLabel ? labelHeight : 0))
+            let aspect = thumbnailFrameAspect
+            let frameWidth = max(24, thumbnailHeight * aspect)
+            let frameCount = max(1, Int(ceil(width / frameWidth)))
 
-            HStack(spacing: showsDetails ? 5 : 0) {
-                if showsThumbnail {
-                    Group {
-                        if let thumbnail {
-                            Image(nsImage: thumbnail)
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                        } else {
-                            theme.thumbnailWell
+            VStack(spacing: 0) {
+                ZStack(alignment: .leading) {
+                    Rectangle().fill(theme.thumbnailWell)
+
+                    HStack(spacing: 0) {
+                        ForEach(0..<frameCount, id: \.self) { index in
+                            let frameImage = filmstripFrame(forTileIndex: index, frameCount: frameCount)
+                            Group {
+                                if let frameImage {
+                                    Image(nsImage: frameImage)
+                                        .resizable()
+                                        .aspectRatio(contentMode: .fill)
+                                } else {
+                                    Rectangle().fill(theme.thumbnailWell)
+                                }
+                            }
+                            .frame(width: frameWidth, height: thumbnailHeight)
+                            .clipped()
+                            .overlay(alignment: .trailing) {
+                                if index < frameCount - 1 {
+                                    Rectangle()
+                                        .fill(Color.black.opacity(0.18))
+                                        .frame(width: 1)
+                                }
+                            }
                         }
                     }
-                    .frame(width: thumbnailWidth)
+                    .frame(width: width, height: thumbnailHeight, alignment: .leading)
                     .clipped()
                 }
+                .frame(height: thumbnailHeight)
+                .clipped()
 
-                if showsDetails {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(sourceClip?.item.fileName ?? "Missing Clip")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.white)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-
-                        Text(detailText)
-                            .font(.system(size: 9, weight: .medium, design: .monospaced))
-                            .foregroundStyle(Color.white.opacity(0.78))
-                            .lineLimit(1)
-                    }
+                if showsLabel {
+                    Text(sourceClip?.item.fileName ?? "Missing Clip")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .padding(.horizontal, 6)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .frame(height: labelHeight)
+                        .background(isSelected ? theme.clipBlueSelected : theme.clipBlue)
+                        .help(detailText)
                 }
-
-                Spacer(minLength: 0)
             }
-            .padding(.horizontal, horizontalPadding)
-            .padding(.vertical, 4)
-            .frame(width: geometry.size.width, height: geometry.size.height)
-            .clipped()
-            .background(
-                Rectangle()
-                    .fill(isSelected ? theme.clipBlueSelected : theme.clipBlue)
-            )
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
             .overlay {
-                Rectangle()
-                    .stroke(isSelected ? theme.accent : Color.white.opacity(0.16), lineWidth: isSelected ? 2 : 1)
+                RoundedRectangle(cornerRadius: cornerRadius)
+                    .stroke(
+                        isSelected ? (isPaired ? pairedOutlineColor : selectionOutlineColor) : Color.white.opacity(0.18),
+                        lineWidth: isSelected ? (isPaired ? 3 : 2) : 1
+                    )
             }
             .overlay(alignment: .leading) {
                 if canTrim {
@@ -4487,7 +5005,24 @@ private struct TimelineClipBlock: View {
                 }
             }
         }
-        .frame(height: 36)
+    }
+
+    private var thumbnailFrameAspect: CGFloat {
+        guard let thumbnail, thumbnail.size.height > 0 else {
+            return 16.0 / 9.0
+        }
+        return max(0.5, thumbnail.size.width / thumbnail.size.height)
+    }
+
+    private func filmstripFrame(forTileIndex index: Int, frameCount: Int) -> NSImage? {
+        if let filmstrip, !filmstrip.isEmpty, totalDuration > 0 {
+            let fraction = (Double(index) + 0.5) / Double(max(frameCount, 1))
+            let absoluteTime = trim.start + fraction * trim.duration
+            let frac = max(0, min(1, absoluteTime / totalDuration))
+            let stripIndex = min(filmstrip.count - 1, max(0, Int((frac * Double(filmstrip.count - 1)).rounded())))
+            return filmstrip[stripIndex]
+        }
+        return thumbnail
     }
 
     private var detailText: String {
@@ -4511,14 +5046,21 @@ private struct TimelineClipBlock: View {
     }
 
     private func trimHandle(_ handle: TimelineTrimHandle) -> some View {
-        Rectangle()
-            .fill(activeTrimHandle == handle ? Color.white : Color.white.opacity(0.78))
-            .frame(width: 7, height: 32)
-            .padding(.horizontal, 1)
-            .shadow(color: .black.opacity(0.22), radius: 2)
-            .gesture(trimGesture(handle))
-            .quickTooltip(handle == .leading ? "Trim Start" : "Trim End")
-            .accessibilityLabel(handle == .leading ? "Trim Start" : "Trim End")
+        let active = activeTrimHandle == handle
+        let baseColor = isPaired ? pairedOutlineColor : selectionOutlineColor
+        return ZStack {
+            RoundedRectangle(cornerRadius: 1.5)
+                .fill(baseColor.opacity(active ? 1.0 : 0.94))
+            Capsule()
+                .fill(Color.white.opacity(active ? 0.85 : 0.6))
+                .frame(width: 1.5, height: 14)
+        }
+        .frame(width: 5, height: 30)
+        .padding(.horizontal, 1)
+        .contentShape(Rectangle())
+        .gesture(trimGesture(handle))
+        .quickTooltip(handle == .leading ? "Trim Start" : "Trim End")
+        .accessibilityLabel(handle == .leading ? "Trim Start" : "Trim End")
     }
 
     private func trimGesture(_ handle: TimelineTrimHandle) -> some Gesture {
@@ -4555,8 +5097,13 @@ struct ThumbnailRow: View {
     var isEdited = false
     var depth = 0
 
+    private let cardWidth: CGFloat = 134
+    private let thumbnailHeight: CGFloat = 78
+    private let labelHeight: CGFloat = 22
+    private let cornerRadius: CGFloat = 4
+
     var body: some View {
-        VStack(spacing: 5) {
+        VStack(spacing: 0) {
             ZStack(alignment: .bottomTrailing) {
                 Group {
                     if let thumbnail {
@@ -4569,12 +5116,9 @@ struct ThumbnailRow: View {
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 }
-                .frame(width: 96, height: 66)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .background {
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(theme.thumbnailWell)
-                }
+                .frame(width: cardWidth, height: thumbnailHeight)
+                .background(theme.thumbnailWell)
+                .clipped()
 
                 Text(item.kind.label)
                     .font(.system(size: 9, weight: .semibold))
@@ -4596,16 +5140,23 @@ struct ThumbnailRow: View {
             }
 
             Text(item.fileName)
-                .font(.caption)
-                .foregroundStyle(theme.secondaryText)
-                .lineLimit(2)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.white)
+                .lineLimit(1)
                 .truncationMode(.middle)
-                .multilineTextAlignment(.center)
-                .frame(width: 100)
+                .padding(.horizontal, 6)
+                .frame(width: cardWidth, height: labelHeight, alignment: .leading)
+                .background(theme.clipBlue)
         }
-        .frame(maxWidth: .infinity)
+        .frame(width: cardWidth)
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+        .overlay {
+            RoundedRectangle(cornerRadius: cornerRadius)
+                .stroke(Color.white.opacity(0.18), lineWidth: 1)
+        }
         .padding(.leading, CGFloat(depth) * 14)
         .padding(.vertical, 4)
+        .frame(maxWidth: .infinity, alignment: .center)
     }
 }
 
@@ -4652,6 +5203,7 @@ struct PreviewPane: View {
     let isCropToolActive: Bool
     let appliedCrop: NormalizedCrop
     let appliedTrim: MediaTrim?
+    let playbackToggleRequest: PlaybackToggleRequest?
     let onApplyCrop: () -> Void
     let onVideoTimeChange: (TimeInterval) -> Void
     @Binding var crop: NormalizedCrop
@@ -4709,6 +5261,7 @@ struct PreviewPane: View {
                         crop: displayCrop,
                         displaySize: naturalSize,
                         trim: appliedTrim,
+                        playbackToggleRequest: playbackToggleRequest,
                         onTimeChange: onVideoTimeChange
                     )
                     .frame(width: mediaSize.width, height: mediaSize.height)
@@ -4761,16 +5314,19 @@ private struct CropOverlay: View {
     @Binding var crop: NormalizedCrop
     let isEditable: Bool
     let onApply: () -> Void
+    var outlineColor: Color?
+    var usesDashedOutline = true
 
     @State private var activeDragStart: NormalizedCrop?
 
     var body: some View {
         GeometryReader { geometry in
             let cropRect = crop.rect(in: geometry.size)
+            let accentColor = outlineColor ?? theme.accent
 
             ZStack(alignment: .topLeading) {
                 CropDimShape(cropRect: cropRect)
-                    .fill(Color.black.opacity(0.46), style: FillStyle(eoFill: true))
+                    .fill(Color.black.opacity(0.70), style: FillStyle(eoFill: true))
                     .allowsHitTesting(false)
 
                 Rectangle()
@@ -4782,16 +5338,18 @@ private struct CropOverlay: View {
                     .allowsHitTesting(isEditable)
 
                 Rectangle()
-                    .strokeBorder(theme.accent, style: StrokeStyle(lineWidth: 2, dash: [7, 5]))
+                    .strokeBorder(
+                        accentColor,
+                        style: StrokeStyle(lineWidth: 2, dash: usesDashedOutline ? [7, 5] : [])
+                    )
                     .frame(width: cropRect.width, height: cropRect.height)
                     .position(x: cropRect.midX, y: cropRect.midY)
                     .allowsHitTesting(false)
 
                 if isEditable {
                     ForEach(CropHandle.allCases) { handle in
-                        Circle()
-                            .fill(theme.accent)
-                            .stroke(Color.white, lineWidth: 1.5)
+                        Rectangle()
+                            .fill(accentColor)
                             .frame(width: 12, height: 12)
                             .position(handle.position(in: cropRect))
                             .gesture(resizeGesture(handle: handle, in: geometry.size))

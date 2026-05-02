@@ -31,7 +31,7 @@ struct MediaBrowserApp: App {
             CommandGroup(after: .toolbar) {
                 Divider()
 
-                Toggle("Preview Panel", isOn: Binding(
+                Toggle("Quick Sort Panel", isOn: Binding(
                     get: { mainPanelState.isVisible(.preview) },
                     set: { mainPanelState.setVisible(.preview, $0) }
                 ))
