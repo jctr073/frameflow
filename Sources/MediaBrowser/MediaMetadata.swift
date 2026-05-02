@@ -2,6 +2,7 @@ import AVFoundation
 import CoreGraphics
 import Foundation
 import ImageIO
+import MediaBrowserCore
 
 struct MediaStatus: Equatable, Sendable {
     let size: CGSize?

@@ -64,19 +64,25 @@ clipsPane
 playerPane
 ├─ selected media-bin clip or active timeline clip header
 ├─ selected timeline clip audio mute / volume controls
-├─ playerEditingToolbar
+├─ playerEditingToolbar with crop, crop preset, reset, zoom +/- and fill controls
 ├─ PreviewPane for media-bin preview
 └─ TimelineSequenceVideoView for full timeline playback
 
 timelinePane
 ├─ timeline toolbar
 │  ├─ Export Timeline
+│  ├─ Add Adjustment Crop
 │  ├─ Reset Timeline Trim
 │  ├─ Split Clip
 │  ├─ Delete Timeline Clip
 │  └─ Timeline Zoom slider
 ├─ timelineRuler
 ├─ adjustmentLayer
+│  └─ TimelineAdjustmentSpanBlock list
+│     ├─ drag-to-move behavior
+│     ├─ resize start handle
+│     ├─ resize end handle
+│     └─ crop keyframe markers with delete context menu
 └─ Video track drop target
    └─ TimelineClipBlock list
       ├─ drag-to-reorder behavior
@@ -151,9 +157,10 @@ that per-instance trim, the player previews the selected timeline trim, and Spli
 creates two timeline instances split at the current player time. `timelineZoom` controls
 timeline clip width and ruler scale without changing media timing.
 
-Each `EditorTimelineClip` may also carry its own `NormalizedCrop`. The
-`playerEditingToolbar` in `playerPane` edits the selected timeline clip's crop when a
-timeline clip is active, and timeline playback/export use that per-instance crop.
+Timeline crop now lives in adjustment spans on the `adjustmentLayer`, not on
+`EditorTimelineClip`. Selecting an adjustment span enables the crop overlay in
+`playerPane`; applying the crop at the playhead creates or updates a crop keyframe, and
+timeline playback/export interpolate between those keyframes.
 
 The editor player has two playback paths. When a media-bin clip is selected,
 `playerPane` still uses `PreviewPane` for single-clip preview. When a timeline clip is
@@ -165,8 +172,8 @@ timeline clip and source media time for highlighting, split, and trim behavior.
 
 Phase 4 timeline export is handled by `MediaExport.exportTimeline`. `ContentView` converts
 `timelineClips` into `TimelineExportClip` values, including clip trims and audio volume /
-mute state, then saves a stitched MP4 through `AVMutableComposition`. Export currently
-supports video timeline clips.
+mute state, and passes adjustment spans separately so playback and export share the same
+timeline crop keyframes. Export currently supports video timeline clips.
 
 Per-timeline-clip `EditorTimelineAdjustments` still stores render settings. The visible
 editor control surface currently exposes audio mute/volume in `playerPane`, and export
@@ -184,6 +191,7 @@ honors those audio settings.
 - `clipsPane`, `playerPane`, `timelinePane`, `editingToolbar`, `previewPanel`: `Sources/MediaBrowser/ContentView.swift`
 - `TimelineSequenceVideoView`: `Sources/MediaBrowser/NativeMediaViews.swift`
 - timeline export: `Sources/MediaBrowser/MediaEditing.swift`
+- timeline adjustment crop model: `Sources/MediaBrowserCore/TimelineAdjustment.swift`
 - `TrimControls`: `Sources/MediaBrowser/ContentView.swift`
 - `PreviewPane`: `Sources/MediaBrowser/ContentView.swift`
 - `NativeVideoView`, `NativeVideoSurface`, `NativeVideoControls`: `Sources/MediaBrowser/NativeMediaViews.swift`

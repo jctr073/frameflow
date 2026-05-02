@@ -2,135 +2,8 @@
 import CoreGraphics
 import Foundation
 import ImageIO
+import MediaBrowserCore
 import UniformTypeIdentifiers
-
-struct NormalizedCrop: Equatable, Hashable, Sendable {
-    var x: CGFloat
-    var y: CGFloat
-    var width: CGFloat
-    var height: CGFloat
-
-    static let full = NormalizedCrop(x: 0, y: 0, width: 1, height: 1)
-
-    var isFullFrame: Bool {
-        abs(x) < 0.0001
-            && abs(y) < 0.0001
-            && abs(width - 1) < 0.0001
-            && abs(height - 1) < 0.0001
-    }
-
-    var displayLabel: String {
-        "\(Int((width * 100).rounded()))% x \(Int((height * 100).rounded()))%"
-    }
-
-    func rect(in size: CGSize) -> CGRect {
-        CGRect(
-            x: x * size.width,
-            y: y * size.height,
-            width: width * size.width,
-            height: height * size.height
-        )
-    }
-
-    func pixelRect(in size: CGSize) -> CGRect {
-        rect(in: size)
-            .intersection(CGRect(origin: .zero, size: size))
-            .integral
-    }
-
-    func clamped(minimumSize: CGFloat = 0.04) -> NormalizedCrop {
-        let nextWidth = min(max(width, minimumSize), 1)
-        let nextHeight = min(max(height, minimumSize), 1)
-        let nextX = min(max(x, 0), 1 - nextWidth)
-        let nextY = min(max(y, 0), 1 - nextHeight)
-        return NormalizedCrop(x: nextX, y: nextY, width: nextWidth, height: nextHeight)
-    }
-
-    static func centered(aspectRatio targetAspectRatio: CGFloat, naturalSize: CGSize) -> NormalizedCrop {
-        guard targetAspectRatio > 0,
-              naturalSize.width > 0,
-              naturalSize.height > 0
-        else {
-            return .full
-        }
-
-        let mediaAspectRatio = naturalSize.width / naturalSize.height
-        let normalizedAspectRatio = targetAspectRatio / mediaAspectRatio
-        let size: CGSize
-
-        if normalizedAspectRatio >= 1 {
-            size = CGSize(width: 1, height: 1 / normalizedAspectRatio)
-        } else {
-            size = CGSize(width: normalizedAspectRatio, height: 1)
-        }
-
-        return NormalizedCrop(
-            x: (1 - size.width) / 2,
-            y: (1 - size.height) / 2,
-            width: size.width,
-            height: size.height
-        ).clamped()
-    }
-}
-
-struct MediaTrim: Equatable, Hashable, Sendable {
-    var start: TimeInterval
-    var end: TimeInterval
-
-    static let minimumDuration: TimeInterval = 0.1
-
-    var duration: TimeInterval {
-        max(0, end - start)
-    }
-
-    var displayLabel: String {
-        "\(Self.format(start))-\(Self.format(end))"
-    }
-
-    func isFullLength(for totalDuration: TimeInterval?) -> Bool {
-        guard let totalDuration, totalDuration > 0 else { return true }
-        let trimmed = clamped(to: totalDuration)
-        return trimmed.start <= 0.001 && abs(trimmed.end - totalDuration) <= 0.001
-    }
-
-    func clamped(to totalDuration: TimeInterval) -> MediaTrim {
-        guard totalDuration > 0 else {
-            return MediaTrim(start: 0, end: 0)
-        }
-
-        let minimumDuration = min(Self.minimumDuration, totalDuration)
-        let nextStart = min(max(start, 0), max(0, totalDuration - minimumDuration))
-        let nextEnd = min(max(end, nextStart + minimumDuration), totalDuration)
-        return MediaTrim(start: nextStart, end: nextEnd)
-    }
-
-    func timeRange(in totalDuration: CMTime) -> CMTimeRange {
-        let totalSeconds = CMTimeGetSeconds(totalDuration)
-        let trimmed = clamped(to: totalSeconds)
-        let startTime = CMTime(seconds: trimmed.start, preferredTimescale: 600)
-        let durationTime = CMTime(seconds: trimmed.end - trimmed.start, preferredTimescale: 600)
-        return CMTimeRange(start: startTime, duration: durationTime)
-    }
-
-    static func full(duration: TimeInterval) -> MediaTrim {
-        MediaTrim(start: 0, end: max(0, duration))
-    }
-
-    static func format(_ time: TimeInterval) -> String {
-        let totalCentiseconds = max(0, Int((time * 100).rounded()))
-        let totalSeconds = totalCentiseconds / 100
-        let centiseconds = totalCentiseconds % 100
-        let hours = totalSeconds / 3600
-        let minutes = (totalSeconds % 3600) / 60
-        let seconds = totalSeconds % 60
-
-        if hours > 0 {
-            return String(format: "%d:%02d:%02d:%02d", hours, minutes, seconds, centiseconds)
-        }
-
-        return String(format: "%02d:%02d:%02d", minutes, seconds, centiseconds)
-    }
-}
 
 struct PinnedMediaItem: Identifiable, Hashable, Sendable {
     var item: MediaItem
@@ -147,7 +20,6 @@ struct PinnedMediaItem: Identifiable, Hashable, Sendable {
 struct TimelineExportClip: Sendable {
     let item: MediaItem
     let trim: MediaTrim?
-    let crop: NormalizedCrop?
     let volume: Float
 }
 
@@ -171,7 +43,11 @@ enum MediaExport {
         }
     }
 
-    static func exportTimeline(_ clips: [TimelineExportClip], to destinationURL: URL) async throws {
+    static func exportTimeline(
+        _ clips: [TimelineExportClip],
+        adjustmentSpans: [TimelineAdjustmentSpan] = [],
+        to destinationURL: URL
+    ) async throws {
         guard !clips.isEmpty else {
             throw MediaExportError.emptyTimeline
         }
@@ -226,16 +102,12 @@ enum MediaExport {
                 y: -transformedBounds.minY
             )
             let displayTransform = preferredTransform.concatenating(normalize)
-            let clipCrop = clip.crop ?? .full
-            let cropRect = clipCrop.pixelRect(in: displaySize)
-            let sourceCropRect = cropRect
-                .applying(displayTransform.inverted())
-                .standardized
-                .intersection(CGRect(origin: .zero, size: naturalSize))
-                .integral
-            let hasVisibleCrop = !clipCrop.isFullFrame && sourceCropRect.width > 1 && sourceCropRect.height > 1
             if renderSize == nil {
-                renderSize = CGSize(width: even(displaySize.width), height: even(displaySize.height))
+                let timelineRenderSize = TimelineCropRenderer.renderSize(
+                    displaySize: displaySize,
+                    adjustmentSpans: adjustmentSpans
+                )
+                renderSize = CGSize(width: even(timelineRenderSize.width), height: even(timelineRenderSize.height))
             }
 
             if let nominalFrameRate = try? await sourceVideoTrack.load(.nominalFrameRate), nominalFrameRate > frameRate {
@@ -248,28 +120,15 @@ enum MediaExport {
 
             let layerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: compositionVideoTrack)
             if let renderSize {
-                let scale = min(renderSize.width / max(displaySize.width, 1), renderSize.height / max(displaySize.height, 1))
-                let scaledSize = CGSize(width: displaySize.width * scale, height: displaySize.height * scale)
-                let displayFrame = CGRect(
-                    x: (renderSize.width - scaledSize.width) / 2,
-                    y: (renderSize.height - scaledSize.height) / 2,
-                    width: scaledSize.width,
-                    height: scaledSize.height
+                TimelineCropRenderer.applyTransformRamps(
+                    to: layerInstruction,
+                    timelineStart: cursor.seconds,
+                    timelineEnd: (cursor + sourceTimeRange.duration).seconds,
+                    displayTransform: displayTransform,
+                    displaySize: displaySize,
+                    renderSize: renderSize,
+                    adjustmentSpans: adjustmentSpans
                 )
-                let fit = CGAffineTransform(scaleX: scale, y: scale)
-                let center = CGAffineTransform(
-                    translationX: displayFrame.minX,
-                    y: displayFrame.minY
-                )
-                layerInstruction.setTransform(
-                    displayTransform
-                        .concatenating(fit)
-                        .concatenating(center),
-                    at: cursor
-                )
-                if hasVisibleCrop {
-                    layerInstruction.setCropRectangle(sourceCropRect, at: cursor)
-                }
             } else {
                 layerInstruction.setTransform(preferredTransform, at: cursor)
             }

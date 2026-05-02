@@ -8,12 +8,23 @@ let package = Package(
         .macOS(.v14)
     ],
     products: [
-        .executable(name: "MediaBrowser", targets: ["MediaBrowser"])
+        .executable(name: "MediaBrowser", targets: ["MediaBrowser"]),
+        .executable(name: "MediaBrowserLogicTests", targets: ["MediaBrowserLogicTests"])
     ],
     targets: [
+        .target(
+            name: "MediaBrowserCore",
+            path: "Sources/MediaBrowserCore"
+        ),
         .executableTarget(
             name: "MediaBrowser",
+            dependencies: ["MediaBrowserCore"],
             path: "Sources/MediaBrowser"
+        ),
+        .executableTarget(
+            name: "MediaBrowserLogicTests",
+            dependencies: ["MediaBrowserCore"],
+            path: "Tests/MediaBrowserLogicTests"
         )
     ]
 )

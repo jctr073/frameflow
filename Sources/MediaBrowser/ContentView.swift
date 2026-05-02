@@ -1,4 +1,5 @@
 import AppKit
+import MediaBrowserCore
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -47,10 +48,14 @@ struct ContentView: View {
     @State private var selectedEditorClipID: EditorClip.ID?
     @State private var timelineClips: [EditorTimelineClip] = []
     @State private var selectedTimelineClipID: EditorTimelineClip.ID?
+    @State private var adjustmentSpans: [TimelineAdjustmentSpan] = []
+    @State private var selectedAdjustmentSpanID: TimelineAdjustmentSpan.ID?
     @State private var draggingTimelineClipID: EditorTimelineClip.ID?
     @State private var editorPlayerTime: TimeInterval = 0
     @State private var timelinePlaybackTime: TimeInterval = 0
     @State private var timelineSeekRequest: TimelinePlaybackSeekRequest?
+    @State private var playerZoomMultiplier = 1.0
+    @State private var isPlayerFillMode = false
     @State private var isTimelineDropTargeted = false
     @State private var timelineZoom = 1.75
     @State private var timelinePlayheadDragStartTime: TimeInterval?
@@ -65,13 +70,15 @@ struct ContentView: View {
     @State private var isCapturingSnapshot = false
     @State private var previewVideoTime: TimeInterval = 0
     @State private var cropRects: [URL: NormalizedCrop] = [:]
-    @State private var timelineCropRects: [EditorTimelineClip.ID: NormalizedCrop] = [:]
+    @State private var adjustmentCropDraft = NormalizedCrop.full
     @State private var trimRanges: [URL: MediaTrim] = [:]
     @State private var appliedCrops: [URL: NormalizedCrop] = [:]
     @State private var appliedTrims: [URL: MediaTrim] = [:]
 
     private let initialFolderURL: URL?
     private let zoomLevels = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0]
+    private let playerZoomRange = 0.25...4.0
+    private let playerZoomStep = 0.25
     private let sidePanelRowInsets = EdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 10)
     private let topToolbarHeight: CGFloat = 48
     private let timelineBasePixelsPerSecond: CGFloat = 12
@@ -637,6 +644,11 @@ struct ContentView: View {
         return timelineClips.first { $0.id == selectedTimelineClipID }
     }
 
+    private var selectedAdjustmentSpan: TimelineAdjustmentSpan? {
+        guard let selectedAdjustmentSpanID else { return nil }
+        return adjustmentSpans.first { $0.id == selectedAdjustmentSpanID }
+    }
+
     private var activeEditorClip: EditorClip? {
         if let timelineClip = selectedTimelineClip,
            let clip = editorClip(for: timelineClip) {
@@ -700,6 +712,10 @@ struct ContentView: View {
     }
 
     private var playerPaneTitle: String {
+        if let selectedAdjustmentSpan {
+            return "Adjustment Crop \(MediaTrim.format(selectedAdjustmentSpan.start))-\(MediaTrim.format(selectedAdjustmentSpan.end))"
+        }
+
         if isShowingTimelinePlayback {
             if let activeTimelineSourceClip {
                 return activeTimelineSourceClip.item.fileName
@@ -723,6 +739,14 @@ struct ContentView: View {
         return "\(MediaTrim.format(activeEditorDisplayedTime)) / \(MediaTrim.format(duration))"
     }
 
+    private var canZoomPlayerPane: Bool {
+        isShowingTimelinePlayback || activeEditorClip != nil
+    }
+
+    private var playerZoomPercentageText: String {
+        "\(Int((playerZoomMultiplier * 100).rounded()))%"
+    }
+
     private var timelinePlaybackClips: [TimelinePlaybackClip] {
         timelineClips.compactMap { timelineClip in
             guard let sourceClip = editorClip(for: timelineClip),
@@ -736,10 +760,27 @@ struct ContentView: View {
                 id: timelineClip.id,
                 url: sourceClip.item.url,
                 trim: timelineClip.trim,
-                crop: timelineClip.crop,
                 volume: adjustments.isMuted ? 0 : Float(adjustments.volume)
             )
         }
+    }
+
+    private var timelinePlaybackAdjustmentSpans: [TimelineAdjustmentSpan] {
+        guard isAdjustmentCropEditing,
+              let selectedAdjustmentSpanID
+        else {
+            return adjustmentSpans
+        }
+
+        return adjustmentSpans.filter { $0.id != selectedAdjustmentSpanID }
+    }
+
+    private var isAdjustmentCropEditing: Bool {
+        isPlayerCropToolActive && selectedAdjustmentSpan != nil
+    }
+
+    private var canEditPlayerCrop: Bool {
+        selectedAdjustmentSpan != nil || (selectedTimelineClip == nil && activeEditorClip != nil)
     }
 
     private var timelinePixelsPerSecond: CGFloat {
@@ -766,10 +807,12 @@ struct ContentView: View {
     }
 
     private var activeEditorCrop: NormalizedCrop {
-        if let selectedTimelineClip {
-            return timelineCropRects[selectedTimelineClip.id]
-                ?? selectedTimelineClip.crop
-                ?? .full
+        if selectedAdjustmentSpan != nil {
+            return adjustmentCropDraft
+        }
+
+        if selectedTimelineClip != nil {
+            return .full
         }
 
         guard let item = activeEditorClip?.item else { return .full }
@@ -779,8 +822,13 @@ struct ContentView: View {
     }
 
     private var activeEditorAppliedCrop: NormalizedCrop {
-        if let selectedTimelineClip {
-            return selectedTimelineClip.crop ?? .full
+        if selectedAdjustmentSpan != nil {
+            return TimelineCropRenderer.activeCrop(in: adjustmentSpans, at: timelinePlaybackTime)
+                ?? adjustmentCropDraft
+        }
+
+        if selectedTimelineClip != nil {
+            return .full
         }
 
         guard let item = activeEditorClip?.item else { return .full }
@@ -790,7 +838,7 @@ struct ContentView: View {
     }
 
     private var activeEditorCanSnapshot: Bool {
-        activeEditorClip?.item.kind == .video
+        selectedAdjustmentSpan == nil && activeEditorClip?.item.kind == .video
     }
 
     private var selectedCanTrim: Bool {
@@ -1047,6 +1095,7 @@ struct ContentView: View {
                         ForEach(editorClips) { clip in
                             Button {
                                 selectedTimelineClipID = nil
+                                selectedAdjustmentSpanID = nil
                                 selectedEditorClipID = clip.id
                                 editorPlayerTime = 0
                             } label: {
@@ -1115,16 +1164,30 @@ struct ContentView: View {
             ZStack {
                 theme.windowBackground
 
-                if isShowingTimelinePlayback && !isPlayerCropToolActive {
-                    TimelineSequenceVideoView(
-                        clips: timelinePlaybackClips,
-                        seekRequest: timelineSeekRequest,
-                        onPlaybackPositionChange: handleTimelinePlaybackPosition
-                    )
+                if isShowingTimelinePlayback && (selectedAdjustmentSpan != nil || !isPlayerCropToolActive) {
+                    ZStack {
+                        TimelineSequenceVideoView(
+                            clips: timelinePlaybackClips,
+                            adjustmentSpans: timelinePlaybackAdjustmentSpans,
+                            zoomMultiplier: playerZoomMultiplier,
+                            fillsFrame: isPlayerFillMode,
+                            seekRequest: timelineSeekRequest,
+                            onPlaybackPositionChange: handleTimelinePlaybackPosition
+                        )
+
+                        if isAdjustmentCropEditing {
+                            CropOverlay(
+                                crop: adjustmentCropBinding,
+                                isEditable: true,
+                                onApply: applyActiveEditorCrop
+                            )
+                        }
+                    }
                 } else if let clip = activeEditorClip {
                     PreviewPane(
                         item: clip.item,
-                        zoomMultiplier: 1,
+                        zoomMultiplier: playerZoomMultiplier,
+                        fillsFrame: isPlayerFillMode,
                         isCropToolActive: isPlayerCropToolActive,
                         appliedCrop: activeEditorAppliedCrop,
                         appliedTrim: activeTimelineTrimForPreview,
@@ -1206,6 +1269,7 @@ struct ContentView: View {
                 if isPlayerCropToolActive {
                     isCropToolActive = false
                     isTrimToolActive = false
+                    syncAdjustmentCropDraft()
                 }
             } label: {
                 Image(systemName: "crop")
@@ -1213,10 +1277,10 @@ struct ContentView: View {
                     .frame(width: 28, height: 26)
             }
             .buttonStyle(.plain)
-            .disabled(activeEditorClip == nil)
+            .disabled(!canEditPlayerCrop)
             .foregroundStyle(isPlayerCropToolActive ? theme.accent : theme.primaryText)
-            .quickTooltip("Crop Tool")
-            .accessibilityLabel("Crop Tool")
+            .quickTooltip(selectedAdjustmentSpan == nil ? "Crop Tool" : "Adjustment Crop Tool")
+            .accessibilityLabel(selectedAdjustmentSpan == nil ? "Crop Tool" : "Adjustment Crop Tool")
 
             Menu {
                 Button("Square 1:1") {
@@ -1243,7 +1307,7 @@ struct ContentView: View {
                     .frame(width: 28, height: 26)
             }
             .buttonStyle(.plain)
-            .disabled(activeEditorClip == nil)
+            .disabled(!canEditPlayerCrop)
             .quickTooltip("Crop Presets")
             .accessibilityLabel("Crop Presets")
 
@@ -1255,11 +1319,58 @@ struct ContentView: View {
                     .frame(width: 28, height: 26)
             }
             .buttonStyle(.plain)
-            .disabled(activeEditorClip == nil || (activeEditorCrop.isFullFrame && activeEditorAppliedCrop.isFullFrame))
-            .quickTooltip("Reset Crop")
-            .accessibilityLabel("Reset Crop")
+            .disabled(!canEditPlayerCrop || (selectedAdjustmentSpan == nil && activeEditorCrop.isFullFrame && activeEditorAppliedCrop.isFullFrame))
+            .quickTooltip(selectedAdjustmentSpan == nil ? "Reset Crop" : "Remove Adjustment Crop")
+            .accessibilityLabel(selectedAdjustmentSpan == nil ? "Reset Crop" : "Remove Adjustment Crop")
 
             Spacer(minLength: 0)
+
+            HStack(spacing: 2) {
+                Button {
+                    zoomPlayerOut()
+                } label: {
+                    Image(systemName: "minus.magnifyingglass")
+                        .font(.system(size: 13, weight: .medium))
+                        .frame(width: 28, height: 26)
+                }
+                .buttonStyle(.plain)
+                .disabled(!canZoomPlayerPane || playerZoomMultiplier <= playerZoomRange.lowerBound)
+                .quickTooltip("Zoom Out Player")
+                .accessibilityLabel("Zoom Out Player")
+
+                Text(playerZoomPercentageText)
+                    .font(.caption.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(theme.secondaryText)
+                    .lineLimit(1)
+                    .frame(width: 44)
+                    .quickTooltip("Player Zoom")
+                    .accessibilityLabel("Player Zoom")
+
+                Button {
+                    zoomPlayerIn()
+                } label: {
+                    Image(systemName: "plus.magnifyingglass")
+                        .font(.system(size: 13, weight: .medium))
+                        .frame(width: 28, height: 26)
+                }
+                .buttonStyle(.plain)
+                .disabled(!canZoomPlayerPane || playerZoomMultiplier >= playerZoomRange.upperBound)
+                .quickTooltip("Zoom In Player")
+                .accessibilityLabel("Zoom In Player")
+
+                Button {
+                    isPlayerFillMode.toggle()
+                } label: {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                        .font(.system(size: 13, weight: .medium))
+                        .frame(width: 28, height: 26)
+                }
+                .buttonStyle(.plain)
+                .disabled(!canZoomPlayerPane)
+                .foregroundStyle(isPlayerFillMode ? theme.accent : theme.primaryText)
+                .quickTooltip(isPlayerFillMode ? "Use Fit Player" : "Fill Player")
+                .accessibilityLabel(isPlayerFillMode ? "Use Fit Player" : "Fill Player")
+            }
         }
         .frame(height: 34)
         .padding(.horizontal, 10)
@@ -1299,6 +1410,19 @@ struct ContentView: View {
                     .frame(width: 1, height: 16)
 
                 Button {
+                    addAdjustmentCropSpan()
+                } label: {
+                    Image(systemName: "rectangle.badge.plus")
+                        .font(.system(size: 13, weight: .medium))
+                        .frame(width: 22, height: 22)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(theme.primaryText)
+                .disabled(actualTimelineDuration <= 0)
+                .quickTooltip("Add Adjustment Crop")
+                .accessibilityLabel("Add Adjustment Crop")
+
+                Button {
                     resetSelectedTimelineTrim()
                 } label: {
                     Image(systemName: "arrow.uturn.backward")
@@ -1325,7 +1449,7 @@ struct ContentView: View {
                 .accessibilityLabel("Split Clip")
 
                 Button {
-                    removeSelectedTimelineClip()
+                    removeSelectedTimelineSelection()
                 } label: {
                     Image(systemName: "trash")
                         .font(.system(size: 13, weight: .medium))
@@ -1333,9 +1457,9 @@ struct ContentView: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(theme.primaryText)
-                .disabled(selectedTimelineClipID == nil)
-                .quickTooltip("Delete Timeline Clip")
-                .accessibilityLabel("Delete Timeline Clip")
+                .disabled(selectedTimelineClipID == nil && selectedAdjustmentSpanID == nil)
+                .quickTooltip(selectedAdjustmentSpanID == nil ? "Delete Timeline Clip" : "Delete Adjustment Crop")
+                .accessibilityLabel(selectedAdjustmentSpanID == nil ? "Delete Timeline Clip" : "Delete Adjustment Crop")
 
                 Spacer(minLength: 0)
 
@@ -1445,6 +1569,42 @@ struct ContentView: View {
                     Rectangle()
                         .fill(theme.trackAlternateBackground.opacity(0.58))
 
+                    ForEach(adjustmentSpans) { span in
+                        TimelineAdjustmentSpanBlock(
+                            span: span,
+                            isSelected: selectedAdjustmentSpanID == span.id,
+                            pixelsPerSecond: timelinePixelsPerSecond,
+                            onSelect: {
+                                selectAdjustmentSpan(span)
+                            },
+                            onMove: { proposedStart in
+                                moveAdjustmentSpan(span, proposedStart: proposedStart)
+                            },
+                            onResizeStart: { proposedStart in
+                                resizeAdjustmentSpanStart(span, proposedStart: proposedStart)
+                            },
+                            onResizeEnd: { proposedEnd in
+                                resizeAdjustmentSpanEnd(span, proposedEnd: proposedEnd)
+                            },
+                            onDeleteKeyframe: { keyframeID in
+                                deleteAdjustmentKeyframe(keyframeID, from: span)
+                            }
+                        )
+                        .frame(
+                            width: max(CGFloat(span.duration) * timelinePixelsPerSecond, 18),
+                            height: 30
+                        )
+                        .offset(
+                            x: CGFloat(span.start) * timelinePixelsPerSecond,
+                            y: 7
+                        )
+                        .contextMenu {
+                            Button("Remove Adjustment Crop") {
+                                removeAdjustmentSpan(span)
+                            }
+                        }
+                    }
+
                     Rectangle()
                         .fill(theme.hairline)
                         .frame(height: 1)
@@ -1551,7 +1711,6 @@ struct ContentView: View {
                             sourceClip: sourceClip,
                             thumbnail: sourceClip.flatMap(editorClipThumbnail(for:)),
                             isSelected: selectedTimelineClipID == clip.id,
-                            hasCrop: clip.crop?.isFullFrame == false,
                             trim: trim,
                             totalDuration: duration,
                             pixelsPerSecond: timelinePixelsPerSecond,
@@ -1805,6 +1964,7 @@ struct ContentView: View {
                 PreviewPane(
                     item: item,
                     zoomMultiplier: zoomLevels[zoomIndex],
+                    fillsFrame: false,
                     isCropToolActive: isCropToolActive,
                     appliedCrop: selectedAppliedCrop,
                     appliedTrim: selectedPreviewTrim,
@@ -1931,10 +2091,10 @@ struct ContentView: View {
         }
 
         if mainPanelState.activeTab == .videoComposer,
-           selectedTimelineClipID != nil {
+           selectedTimelineClipID != nil || selectedAdjustmentSpanID != nil {
             switch event.keyCode {
             case 51, 117:
-                removeSelectedTimelineClip()
+                removeSelectedTimelineSelection()
                 return true
             default:
                 break
@@ -1983,6 +2143,14 @@ struct ContentView: View {
         zoomIndex = max(zoomIndex - 1, zoomLevels.startIndex)
     }
 
+    private func zoomPlayerIn() {
+        playerZoomMultiplier = min(playerZoomMultiplier + playerZoomStep, playerZoomRange.upperBound)
+    }
+
+    private func zoomPlayerOut() {
+        playerZoomMultiplier = max(playerZoomMultiplier - playerZoomStep, playerZoomRange.lowerBound)
+    }
+
     private func cropBinding(for item: MediaItem) -> Binding<NormalizedCrop> {
         Binding {
             cropRects[item.id] ?? pinnedItems.first { $0.id == item.id }?.crop ?? .full
@@ -1995,11 +2163,17 @@ struct ContentView: View {
         Binding {
             activeEditorCrop
         } set: { newValue in
-            if let selectedTimelineClipID {
-                timelineCropRects[selectedTimelineClipID] = newValue.clamped()
-            } else {
+            if selectedTimelineClip == nil {
                 cropRects[item.id] = newValue.clamped()
             }
+        }
+    }
+
+    private var adjustmentCropBinding: Binding<NormalizedCrop> {
+        Binding {
+            adjustmentCropDraft
+        } set: { newValue in
+            updateAdjustmentCropDraft(newValue.clamped())
         }
     }
 
@@ -2030,15 +2204,25 @@ struct ContentView: View {
     }
 
     private func applyActiveEditorCropPreset(width: CGFloat, height: CGFloat) {
+        if selectedAdjustmentSpan != nil {
+            let crop = NormalizedCrop.centered(
+                aspectRatio: width / height,
+                naturalSize: CGSize(width: 16, height: 9)
+            )
+            updateAdjustmentCropDraft(crop)
+            isPlayerCropToolActive = true
+            isCropToolActive = false
+            isTrimToolActive = false
+            return
+        }
+
         guard let clip = activeEditorClip else { return }
         let naturalSize = clip.status?.size ?? CGSize(width: width, height: height)
         let crop = NormalizedCrop.centered(
             aspectRatio: width / height,
             naturalSize: naturalSize
         )
-        if let selectedTimelineClipID {
-            timelineCropRects[selectedTimelineClipID] = crop
-        } else {
+        if selectedTimelineClip == nil {
             cropRects[clip.item.id] = crop
         }
         isPlayerCropToolActive = true
@@ -2057,14 +2241,13 @@ struct ContentView: View {
     }
 
     private func clearActiveEditorCrop() {
-        if let selectedTimelineClip,
-           let index = timelineClips.firstIndex(where: { $0.id == selectedTimelineClip.id }) {
-            timelineCropRects[selectedTimelineClip.id] = .full
-            timelineClips[index].crop = nil
+        if let selectedAdjustmentSpan {
+            removeAdjustmentSpan(selectedAdjustmentSpan)
             isPlayerCropToolActive = false
             return
         }
 
+        guard selectedTimelineClip == nil else { return }
         guard let item = activeEditorClip?.item else { return }
         cropRects[item.id] = .full
         appliedCrops[item.id] = nil
@@ -2084,16 +2267,12 @@ struct ContentView: View {
     }
 
     private func applyActiveEditorCrop() {
-        if let selectedTimelineClip,
-           let index = timelineClips.firstIndex(where: { $0.id == selectedTimelineClip.id }) {
-            let crop = activeEditorCrop.clamped()
-            guard !crop.isFullFrame else { return }
-            timelineClips[index].crop = crop
-            timelineCropRects[selectedTimelineClip.id] = crop
-            isPlayerCropToolActive = false
+        if selectedAdjustmentSpan != nil {
+            applyAdjustmentCropKeyframe()
             return
         }
 
+        guard selectedTimelineClip == nil else { return }
         guard let item = activeEditorClip?.item else { return }
         let crop = activeEditorCrop.clamped()
         guard !crop.isFullFrame else { return }
@@ -2339,6 +2518,7 @@ struct ContentView: View {
     private func addToEditorClips(_ items: [MediaItem]) {
         guard !items.isEmpty else { return }
         selectedTimelineClipID = nil
+        selectedAdjustmentSpanID = nil
 
         for item in items {
             if !editorClips.contains(where: { $0.id == item.id }) {
@@ -2367,6 +2547,8 @@ struct ContentView: View {
     private func selectTimelineClip(_ timelineClip: EditorTimelineClip) {
         selectedTimelineClipID = timelineClip.id
         selectedEditorClipID = nil
+        selectedAdjustmentSpanID = nil
+        isPlayerCropToolActive = false
 
         let timelineStart = timelineStartTime(for: timelineClip)
         timelinePlaybackTime = timelineStart
@@ -2394,6 +2576,7 @@ struct ContentView: View {
         }
 
         editorPlayerTime = position.sourceTime
+        syncAdjustmentCropDraft()
     }
 
     private func addActiveThumbnailToEditorClips() -> Bool {
@@ -2426,13 +2609,8 @@ struct ContentView: View {
 
     private func removeEditorClip(_ clip: EditorClip) {
         editorClips.removeAll { $0.id == clip.id }
-        let removedTimelineClipIDs = timelineClips
-            .filter { $0.sourceClipID == clip.id }
-            .map(\.id)
         timelineClips.removeAll { $0.sourceClipID == clip.id }
-        for clipID in removedTimelineClipIDs {
-            timelineCropRects[clipID] = nil
-        }
+        clampAdjustmentSpansToTimeline()
         if selectedEditorClipID == clip.id {
             selectedEditorClipID = editorClips.first?.id
         }
@@ -2563,6 +2741,279 @@ struct ContentView: View {
         min(max(CGFloat(timelineDuration(for: clip)) * timelinePixelsPerSecond, 18), 900)
     }
 
+    private func selectAdjustmentSpan(_ span: TimelineAdjustmentSpan) {
+        selectedAdjustmentSpanID = span.id
+        selectedEditorClipID = nil
+
+        if !span.contains(timelinePlaybackTime) {
+            seekTimelinePlayhead(to: span.start)
+        }
+
+        syncAdjustmentCropDraft()
+        isPlayerCropToolActive = true
+        isCropToolActive = false
+        isTrimToolActive = false
+    }
+
+    private func addAdjustmentCropSpan() {
+        guard actualTimelineDuration > 0,
+              let range = newAdjustmentSpanRange()
+        else {
+            return
+        }
+
+        let crop = defaultAdjustmentCrop()
+        let span = TimelineAdjustmentSpan(
+            start: range.start,
+            end: range.end,
+            keyframes: [TimelineCropKeyframe(time: range.start, crop: crop)]
+        ).normalized(to: actualTimelineDuration)
+
+        adjustmentSpans.append(span)
+        adjustmentSpans.sort { $0.start < $1.start }
+        adjustmentCropDraft = crop
+        selectAdjustmentSpan(span)
+    }
+
+    private func moveAdjustmentSpan(_ span: TimelineAdjustmentSpan, proposedStart: TimeInterval) {
+        guard let index = adjustmentSpans.firstIndex(where: { $0.id == span.id }),
+              actualTimelineDuration > 0
+        else {
+            return
+        }
+
+        let range = TimelineAdjustmentSpan.clampedMoveRange(
+            start: span.start,
+            end: span.end,
+            proposedStart: proposedStart,
+            timelineDuration: actualTimelineDuration,
+            occupiedRanges: occupiedAdjustmentRanges(excluding: span.id)
+        )
+        let delta = range.start - span.start
+        adjustmentSpans[index].start = range.start
+        adjustmentSpans[index].end = range.end
+        adjustmentSpans[index].keyframes = adjustmentSpans[index].keyframes.map { keyframe in
+            TimelineCropKeyframe(id: keyframe.id, time: keyframe.time + delta, crop: keyframe.crop)
+        }
+        adjustmentSpans.sort { $0.start < $1.start }
+        selectedAdjustmentSpanID = span.id
+        syncAdjustmentCropDraft()
+    }
+
+    private func resizeAdjustmentSpanStart(_ span: TimelineAdjustmentSpan, proposedStart: TimeInterval) {
+        guard let index = adjustmentSpans.firstIndex(where: { $0.id == span.id }),
+              actualTimelineDuration > 0
+        else {
+            return
+        }
+
+        adjustmentSpans[index].start = TimelineAdjustmentSpan.clampedResizeStart(
+            proposedStart: proposedStart,
+            fixedEnd: span.end,
+            timelineDuration: actualTimelineDuration,
+            occupiedRanges: occupiedAdjustmentRanges(excluding: span.id)
+        )
+        adjustmentSpans[index] = adjustmentSpans[index].normalized(to: actualTimelineDuration)
+        selectedAdjustmentSpanID = span.id
+        syncAdjustmentCropDraft()
+    }
+
+    private func resizeAdjustmentSpanEnd(_ span: TimelineAdjustmentSpan, proposedEnd: TimeInterval) {
+        guard let index = adjustmentSpans.firstIndex(where: { $0.id == span.id }),
+              actualTimelineDuration > 0
+        else {
+            return
+        }
+
+        adjustmentSpans[index].end = TimelineAdjustmentSpan.clampedResizeEnd(
+            fixedStart: span.start,
+            proposedEnd: proposedEnd,
+            timelineDuration: actualTimelineDuration,
+            occupiedRanges: occupiedAdjustmentRanges(excluding: span.id)
+        )
+        adjustmentSpans[index] = adjustmentSpans[index].normalized(to: actualTimelineDuration)
+        selectedAdjustmentSpanID = span.id
+        syncAdjustmentCropDraft()
+    }
+
+    private func removeAdjustmentSpan(_ span: TimelineAdjustmentSpan) {
+        adjustmentSpans.removeAll { $0.id == span.id }
+        if selectedAdjustmentSpanID == span.id {
+            selectedAdjustmentSpanID = nil
+            adjustmentCropDraft = defaultAdjustmentCrop()
+            isPlayerCropToolActive = false
+        }
+    }
+
+    private func deleteAdjustmentKeyframe(_ keyframeID: TimelineCropKeyframe.ID, from span: TimelineAdjustmentSpan) {
+        guard let index = adjustmentSpans.firstIndex(where: { $0.id == span.id }) else {
+            return
+        }
+
+        selectedAdjustmentSpanID = span.id
+        adjustmentSpans[index].keyframes.removeAll { $0.id == keyframeID }
+        if adjustmentSpans[index].keyframes.isEmpty {
+            removeAdjustmentSpan(adjustmentSpans[index])
+        } else {
+            syncAdjustmentCropDraft()
+        }
+    }
+
+    private func clampAdjustmentSpansToTimeline() {
+        let timelineDuration = actualTimelineDuration
+        guard timelineDuration > 0 else {
+            adjustmentSpans.removeAll()
+            selectedAdjustmentSpanID = nil
+            return
+        }
+
+        var clampedSpans: [TimelineAdjustmentSpan] = []
+        for span in adjustmentSpans
+            .map({ $0.normalized(to: timelineDuration) })
+            .sorted(by: { $0.start < $1.start }) {
+            let occupiedRanges = clampedSpans.map { MediaTrim(start: $0.start, end: $0.end) }
+            let range = TimelineAdjustmentSpan.clampedMoveRange(
+                start: span.start,
+                end: span.end,
+                proposedStart: span.start,
+                timelineDuration: timelineDuration,
+                occupiedRanges: occupiedRanges
+            )
+            guard range.duration >= TimelineAdjustmentSpan.minimumDuration,
+                  !occupiedRanges.contains(where: { range.start < $0.end && range.end > $0.start })
+            else {
+                continue
+            }
+
+            let delta = range.start - span.start
+            clampedSpans.append(TimelineAdjustmentSpan(
+                id: span.id,
+                start: range.start,
+                end: range.end,
+                keyframes: span.keyframes.map { keyframe in
+                    TimelineCropKeyframe(id: keyframe.id, time: keyframe.time + delta, crop: keyframe.crop)
+                }
+            ).normalized(to: timelineDuration))
+        }
+
+        adjustmentSpans = clampedSpans
+
+        if let selectedAdjustmentSpanID,
+           !adjustmentSpans.contains(where: { $0.id == selectedAdjustmentSpanID }) {
+            self.selectedAdjustmentSpanID = nil
+            isPlayerCropToolActive = false
+        }
+    }
+
+    private func updateAdjustmentCropDraft(_ crop: NormalizedCrop) {
+        let sizeChanged = abs(crop.width - adjustmentCropDraft.width) > 0.000_1
+            || abs(crop.height - adjustmentCropDraft.height) > 0.000_1
+        if selectedAdjustmentSpan != nil, sizeChanged {
+            adjustmentSpans = adjustmentSpans.map { span in
+                span.replacingCropSize(width: crop.width, height: crop.height)
+            }
+        }
+
+        adjustmentCropDraft = crop
+    }
+
+    private func syncAdjustmentCropDraft() {
+        guard let selectedAdjustmentSpan else {
+            return
+        }
+
+        adjustmentCropDraft = TimelineCropRenderer.activeCrop(in: adjustmentSpans, at: timelinePlaybackTime)
+            ?? selectedAdjustmentSpan.crop(at: selectedAdjustmentSpan.start)
+            ?? defaultAdjustmentCrop()
+    }
+
+    private func applyAdjustmentCropKeyframe() {
+        guard let selectedAdjustmentSpan,
+              let index = adjustmentSpans.firstIndex(where: { $0.id == selectedAdjustmentSpan.id })
+        else {
+            return
+        }
+
+        let time = min(max(timelinePlaybackTime, selectedAdjustmentSpan.start), selectedAdjustmentSpan.end)
+        let crop = adjustmentCropDraft.clamped()
+        guard !crop.isFullFrame else {
+            return
+        }
+
+        adjustmentSpans[index] = adjustmentSpans[index].upsertingKeyframe(at: time, crop: crop)
+        timelinePlaybackTime = time
+        timelineSeekRequest = TimelinePlaybackSeekRequest(time: time)
+        isPlayerCropToolActive = true
+        syncAdjustmentCropDraft()
+    }
+
+    private func defaultAdjustmentCrop() -> NormalizedCrop {
+        if !adjustmentCropDraft.isFullFrame {
+            return adjustmentCropDraft
+        }
+
+        return NormalizedCrop(x: 0.25, y: 0, width: 0.5, height: 1).clamped()
+    }
+
+    private func newAdjustmentSpanRange() -> MediaTrim? {
+        let preferredRange: MediaTrim
+        if let selectedTimelineClip {
+            let start = timelineStartTime(for: selectedTimelineClip)
+            preferredRange = MediaTrim(start: start, end: start + timelineDuration(for: selectedTimelineClip))
+        } else {
+            preferredRange = MediaTrim(start: 0, end: actualTimelineDuration)
+        }
+
+        let duration = min(max(preferredRange.duration, TimelineAdjustmentSpan.minimumDuration), actualTimelineDuration)
+        let gaps = adjustmentGaps(excluding: nil)
+            .filter { $0.duration >= TimelineAdjustmentSpan.minimumDuration }
+        guard !gaps.isEmpty else {
+            return nil
+        }
+
+        let bestGap = gaps.min { lhs, rhs in
+            let lhsStart = min(max(preferredRange.start, lhs.start), max(lhs.start, lhs.end - min(duration, lhs.duration)))
+            let rhsStart = min(max(preferredRange.start, rhs.start), max(rhs.start, rhs.end - min(duration, rhs.duration)))
+            return abs(lhsStart - preferredRange.start) < abs(rhsStart - preferredRange.start)
+        } ?? gaps[0]
+        let nextDuration = min(duration, bestGap.duration)
+        let nextStart = min(max(preferredRange.start, bestGap.start), bestGap.end - nextDuration)
+        return MediaTrim(start: nextStart, end: nextStart + nextDuration)
+    }
+
+    private func occupiedAdjustmentRanges(excluding id: TimelineAdjustmentSpan.ID?) -> [MediaTrim] {
+        adjustmentSpans
+            .filter { $0.id != id }
+            .map { MediaTrim(start: $0.start, end: $0.end) }
+    }
+
+    private func adjustmentGaps(excluding id: TimelineAdjustmentSpan.ID?) -> [MediaTrim] {
+        let timelineDuration = actualTimelineDuration
+        guard timelineDuration > 0 else {
+            return []
+        }
+
+        let ranges = occupiedAdjustmentRanges(excluding: id)
+            .map { MediaTrim(start: min(max($0.start, 0), timelineDuration), end: min(max($0.end, 0), timelineDuration)) }
+            .filter { $0.duration > 0 }
+            .sorted { $0.start < $1.start }
+        var gaps: [MediaTrim] = []
+        var cursor = TimeInterval(0)
+
+        for range in ranges {
+            if range.start > cursor {
+                gaps.append(MediaTrim(start: cursor, end: range.start))
+            }
+            cursor = max(cursor, range.end)
+        }
+
+        if cursor < timelineDuration {
+            gaps.append(MediaTrim(start: cursor, end: timelineDuration))
+        }
+
+        return gaps
+    }
+
     private func clampedTimelinePlayheadTime(_ time: TimeInterval) -> TimeInterval {
         min(max(time, 0), max(timelineSeekableDuration, 0))
     }
@@ -2666,6 +3117,7 @@ struct ContentView: View {
         let nextTrim = trim.clamped(to: duration)
 
         timelineClips[index].trim = nextTrim.isFullLength(for: duration) ? nil : nextTrim
+        clampAdjustmentSpansToTimeline()
 
         if selectedTimelineClipID == clip.id {
             editorPlayerTime = min(max(editorPlayerTime, nextTrim.start), nextTrim.end)
@@ -2684,6 +3136,7 @@ struct ContentView: View {
         }
 
         timelineClips[index].trim = nil
+        clampAdjustmentSpansToTimeline()
         editorPlayerTime = min(max(editorPlayerTime, 0), duration)
         let timelineTime = timelineStartTime(for: timelineClips[index]) + editorPlayerTime
         timelinePlaybackTime = timelineTime
@@ -2709,8 +3162,7 @@ struct ContentView: View {
         timelineClips[index].trim = MediaTrim(start: trim.start, end: splitTime).clamped(to: duration)
         let rightClip = EditorTimelineClip(
             sourceClipID: selectedTimelineClip.sourceClipID,
-            trim: MediaTrim(start: splitTime, end: trim.end).clamped(to: duration),
-            crop: selectedTimelineClip.crop
+            trim: MediaTrim(start: splitTime, end: trim.end).clamped(to: duration)
         )
         timelineClips.insert(rightClip, at: timelineClips.index(after: index))
         selectTimelineClip(rightClip)
@@ -2792,6 +3244,8 @@ struct ContentView: View {
         }
 
         selectedTimelineClipID = draggedID
+        selectedAdjustmentSpanID = nil
+        isPlayerCropToolActive = false
         syncTimelinePlaybackToSelectedClip()
     }
 
@@ -2812,7 +3266,7 @@ struct ContentView: View {
     private func removeTimelineClip(_ clip: EditorTimelineClip) {
         let removedIndex = timelineClips.firstIndex { $0.id == clip.id }
         timelineClips.removeAll { $0.id == clip.id }
-        timelineCropRects[clip.id] = nil
+        clampAdjustmentSpansToTimeline()
 
         if selectedTimelineClipID == clip.id {
             if let removedIndex, !timelineClips.isEmpty {
@@ -2832,6 +3286,15 @@ struct ContentView: View {
         }
 
         removeTimelineClip(selectedTimelineClip)
+    }
+
+    private func removeSelectedTimelineSelection() {
+        if let selectedAdjustmentSpan {
+            removeAdjustmentSpan(selectedAdjustmentSpan)
+            return
+        }
+
+        removeSelectedTimelineClip()
     }
 
     private func exportTimeline() {
@@ -2859,7 +3322,11 @@ struct ContentView: View {
         isExportingTimeline = true
         Task {
             do {
-                try await MediaExport.exportTimeline(exportClips, to: destinationURL)
+                try await MediaExport.exportTimeline(
+                    exportClips,
+                    adjustmentSpans: adjustmentSpans,
+                    to: destinationURL
+                )
                 showTimelineExportSuccess(destinationURL)
             } catch {
                 showTimelineExportFailure(error)
@@ -2878,7 +3345,6 @@ struct ContentView: View {
             return TimelineExportClip(
                 item: sourceClip.item,
                 trim: timelineClip.trim,
-                crop: timelineClip.crop,
                 volume: adjustments.isMuted ? 0 : Float(adjustments.volume)
             )
         }
@@ -3321,7 +3787,6 @@ private struct EditorTimelineClip: Identifiable, Hashable {
     let id = UUID()
     let sourceClipID: EditorClip.ID
     var trim: MediaTrim? = nil
-    var crop: NormalizedCrop? = nil
     var adjustments = EditorTimelineAdjustments()
 }
 
@@ -3790,12 +4255,140 @@ private struct TimelinePlayheadHandleShape: Shape {
     }
 }
 
+private struct TimelineAdjustmentSpanBlock: View {
+    @Environment(\.editorTheme) private var theme
+    let span: TimelineAdjustmentSpan
+    let isSelected: Bool
+    let pixelsPerSecond: CGFloat
+    let onSelect: () -> Void
+    let onMove: (TimeInterval) -> Void
+    let onResizeStart: (TimeInterval) -> Void
+    let onResizeEnd: (TimeInterval) -> Void
+    let onDeleteKeyframe: (TimelineCropKeyframe.ID) -> Void
+
+    @State private var dragStartTime: TimeInterval?
+    @State private var activeHandle: SpanHandle?
+
+    var body: some View {
+        GeometryReader { geometry in
+            let width = geometry.size.width
+
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(isSelected ? theme.accent.opacity(0.78) : theme.accent.opacity(0.42))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(isSelected ? Color.white.opacity(0.88) : theme.accent.opacity(0.75), lineWidth: isSelected ? 2 : 1)
+                    }
+
+                HStack(spacing: 5) {
+                    Image(systemName: "crop")
+                        .font(.system(size: 10, weight: .bold))
+
+                    if width >= 74 {
+                        Text(MediaTrim.format(span.duration))
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .lineLimit(1)
+                    }
+                }
+                .foregroundStyle(isSelected ? Color.black.opacity(0.82) : Color.white.opacity(0.86))
+                .padding(.horizontal, 7)
+                .allowsHitTesting(false)
+
+                ForEach(span.sortedKeyframes) { keyframe in
+                    Circle()
+                        .fill(Color.white)
+                        .stroke(Color.black.opacity(0.35), lineWidth: 1)
+                        .frame(width: 7, height: 7)
+                        .frame(width: 16, height: 16)
+                        .contentShape(Rectangle())
+                        .offset(
+                            x: keyframeOffset(keyframe, width: width) - 8,
+                            y: 16
+                        )
+                        .contextMenu {
+                            Button("Delete Keyframe") {
+                                onDeleteKeyframe(keyframe.id)
+                            }
+                        }
+                        .quickTooltip("Crop Keyframe")
+                        .accessibilityLabel("Crop Keyframe")
+                }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture(perform: onSelect)
+            .gesture(moveGesture)
+            .overlay(alignment: .leading) {
+                resizeHandle(.leading)
+            }
+            .overlay(alignment: .trailing) {
+                resizeHandle(.trailing)
+            }
+        }
+    }
+
+    private func keyframeOffset(_ keyframe: TimelineCropKeyframe, width: CGFloat) -> CGFloat {
+        guard span.duration > 0 else { return 0 }
+        let progress = min(max((keyframe.time - span.start) / span.duration, 0), 1)
+        return CGFloat(progress) * width
+    }
+
+    private var moveGesture: some Gesture {
+        DragGesture(minimumDistance: 1)
+            .onChanged { value in
+                let startTime = dragStartTime ?? span.start
+                dragStartTime = startTime
+                onMove(startTime + TimeInterval(value.translation.width / max(pixelsPerSecond, 1)))
+            }
+            .onEnded { _ in
+                dragStartTime = nil
+            }
+    }
+
+    private func resizeHandle(_ handle: SpanHandle) -> some View {
+        Rectangle()
+            .fill(activeHandle == handle ? Color.white : Color.white.opacity(0.82))
+            .frame(width: 6)
+            .padding(.vertical, 4)
+            .shadow(color: .black.opacity(0.22), radius: 2)
+            .gesture(resizeGesture(handle))
+            .quickTooltip(handle == .leading ? "Adjustment Start" : "Adjustment End")
+            .accessibilityLabel(handle == .leading ? "Adjustment Start" : "Adjustment End")
+    }
+
+    private func resizeGesture(_ handle: SpanHandle) -> some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                activeHandle = handle
+                let delta = TimeInterval(value.translation.width / max(pixelsPerSecond, 1))
+                switch handle {
+                case .leading:
+                    let startTime = dragStartTime ?? span.start
+                    dragStartTime = startTime
+                    onResizeStart(startTime + delta)
+                case .trailing:
+                    let endTime = dragStartTime ?? span.end
+                    dragStartTime = endTime
+                    onResizeEnd(endTime + delta)
+                }
+            }
+            .onEnded { _ in
+                activeHandle = nil
+                dragStartTime = nil
+            }
+    }
+
+    private enum SpanHandle {
+        case leading
+        case trailing
+    }
+}
+
 private struct TimelineClipBlock: View {
     @Environment(\.editorTheme) private var theme
     let sourceClip: EditorClip?
     let thumbnail: NSImage?
     let isSelected: Bool
-    let hasCrop: Bool
     let trim: MediaTrim
     let totalDuration: TimeInterval
     let pixelsPerSecond: CGFloat
@@ -3855,18 +4448,6 @@ private struct TimelineClipBlock: View {
             .overlay {
                 Rectangle()
                     .stroke(isSelected ? theme.accent : Color.white.opacity(0.16), lineWidth: isSelected ? 2 : 1)
-            }
-            .overlay(alignment: .topTrailing) {
-                if hasCrop {
-                    Image(systemName: "crop")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(Color.black)
-                        .frame(width: 16, height: 16)
-                        .background(theme.accent, in: Circle())
-                        .padding(3)
-                        .quickTooltip("Cropped")
-                        .accessibilityLabel("Cropped")
-                }
             }
             .overlay(alignment: .leading) {
                 if canTrim {
@@ -4040,6 +4621,7 @@ struct PreviewPane: View {
     @Environment(\.editorTheme) private var theme
     let item: MediaItem
     let zoomMultiplier: Double
+    let fillsFrame: Bool
     let isCropToolActive: Bool
     let appliedCrop: NormalizedCrop
     let appliedTrim: MediaTrim?
@@ -4079,10 +4661,11 @@ struct PreviewPane: View {
         let displayCrop = isCropToolActive ? NormalizedCrop.full : appliedCrop
         let sourceRect = displayCrop.pixelRect(in: naturalSize)
         let displayNaturalSize = displayCrop.isFullFrame ? naturalSize : sourceRect.size
-        let baseFitScale = min(
-            containerSize.width / displayNaturalSize.width,
-            containerSize.height / displayNaturalSize.height
-        )
+        let widthFitScale = containerSize.width / displayNaturalSize.width
+        let heightFitScale = containerSize.height / displayNaturalSize.height
+        let baseFitScale = fillsFrame
+            ? max(widthFitScale, heightFitScale)
+            : min(widthFitScale, heightFitScale)
         let fitScale = item.kind.shouldUpscaleToFit ? baseFitScale : min(baseFitScale, 1.0)
         let scale = max(0.08, fitScale * zoomMultiplier)
         let mediaSize = CGSize(width: displayNaturalSize.width * scale, height: displayNaturalSize.height * scale)
@@ -4114,6 +4697,7 @@ struct PreviewPane: View {
             }
             .frame(width: contentSize.width, height: contentSize.height)
         }
+        .defaultScrollAnchor(.center)
     }
 
     @ViewBuilder

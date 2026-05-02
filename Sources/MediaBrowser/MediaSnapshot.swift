@@ -1,6 +1,7 @@
 import AppKit
 import AVFoundation
 import ImageIO
+import MediaBrowserCore
 import UniformTypeIdentifiers
 
 enum MediaSnapshot {

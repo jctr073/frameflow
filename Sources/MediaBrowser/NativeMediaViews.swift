@@ -1,6 +1,7 @@
 @preconcurrency import AppKit
 import AVKit
 import ImageIO
+import MediaBrowserCore
 import SwiftUI
 import UniformTypeIdentifiers
 import WebKit
@@ -183,7 +184,10 @@ struct NativeVideoView: View {
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            NativeVideoSurface(player: controller.player)
+            Color.black
+
+            NativeVideoSurface(player: controller.player, fillsFrame: false)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             NativeVideoControls(controller: controller)
                 .padding(.horizontal, 14)
@@ -217,17 +221,41 @@ struct NativeVideoView: View {
 
 private struct NativeVideoSurface: NSViewRepresentable {
     let player: AVPlayer
+    let fillsFrame: Bool
 
     func makeNSView(context: Context) -> AVPlayerView {
         let view = AVPlayerView()
         view.controlsStyle = .none
-        view.videoGravity = .resizeAspect
+        view.videoGravity = videoGravity
         view.player = player
         return view
     }
 
     func updateNSView(_ nsView: AVPlayerView, context: Context) {
         nsView.player = player
+        nsView.videoGravity = videoGravity
+    }
+
+    private var videoGravity: AVLayerVideoGravity {
+        fillsFrame ? .resizeAspectFill : .resizeAspect
+    }
+}
+
+private struct ZoomableNativeVideoSurface: View {
+    let player: AVPlayer
+    let zoomMultiplier: Double
+    let fillsFrame: Bool
+
+    var body: some View {
+        GeometryReader { geometry in
+            NativeVideoSurface(player: player, fillsFrame: fillsFrame)
+                .frame(width: geometry.size.width, height: geometry.size.height)
+                .scaleEffect(CGFloat(max(0.08, zoomMultiplier)), anchor: .center)
+                .frame(width: geometry.size.width, height: geometry.size.height)
+                .clipped()
+        }
+        .background(Color.black)
+        .clipped()
     }
 }
 
@@ -312,7 +340,6 @@ struct TimelinePlaybackClip: Identifiable, Hashable {
     let id: UUID
     let url: URL
     let trim: MediaTrim?
-    let crop: NormalizedCrop?
     let volume: Float
 }
 
@@ -330,6 +357,9 @@ struct TimelinePlaybackPosition: Equatable {
 struct TimelineSequenceVideoView: View {
     @Environment(\.editorTheme) private var theme
     let clips: [TimelinePlaybackClip]
+    let adjustmentSpans: [TimelineAdjustmentSpan]
+    let zoomMultiplier: Double
+    let fillsFrame: Bool
     let seekRequest: TimelinePlaybackSeekRequest?
     let onPlaybackPositionChange: (TimelinePlaybackPosition) -> Void
 
@@ -337,7 +367,12 @@ struct TimelineSequenceVideoView: View {
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            NativeVideoSurface(player: controller.player)
+            ZoomableNativeVideoSurface(
+                player: controller.player,
+                zoomMultiplier: zoomMultiplier,
+                fillsFrame: fillsFrame
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             if controller.isLoading {
                 ProgressView()
@@ -355,13 +390,16 @@ struct TimelineSequenceVideoView: View {
                 .padding(.bottom, 12)
         }
         .onAppear {
-            controller.load(clips, seekTime: seekRequest?.time)
+            controller.load(clips, adjustmentSpans: adjustmentSpans, seekTime: seekRequest?.time)
         }
         .onDisappear {
             controller.stop()
         }
         .onChange(of: clips) {
-            controller.load(clips)
+            controller.load(clips, adjustmentSpans: adjustmentSpans)
+        }
+        .onChange(of: adjustmentSpans) {
+            controller.load(clips, adjustmentSpans: adjustmentSpans)
         }
         .onChange(of: seekRequest) {
             guard let seekRequest else { return }
@@ -465,6 +503,7 @@ private final class TimelineSequenceVideoController: ObservableObject {
     @Published var position = TimelinePlaybackPosition(timelineTime: 0, clipID: nil, sourceTime: 0)
 
     private var clips: [TimelinePlaybackClip] = []
+    private var adjustmentSpans: [TimelineAdjustmentSpan] = []
     private var ranges: [TimelinePlaybackRange] = []
     private var loadTask: Task<Void, Never>?
     private var endObserver: NSObjectProtocol?
@@ -497,10 +536,14 @@ private final class TimelineSequenceVideoController: ObservableObject {
         }
     }
 
-    func load(_ clips: [TimelinePlaybackClip], seekTime: TimeInterval? = nil) {
+    func load(
+        _ clips: [TimelinePlaybackClip],
+        adjustmentSpans: [TimelineAdjustmentSpan],
+        seekTime: TimeInterval? = nil
+    ) {
         installTimeObserverIfNeeded()
 
-        guard clips != self.clips else {
+        guard clips != self.clips || adjustmentSpans != self.adjustmentSpans else {
             return
         }
 
@@ -508,6 +551,7 @@ private final class TimelineSequenceVideoController: ObservableObject {
         let requestedTime = seekTime ?? min(currentTime, duration)
         pendingSeekTime = seekTime
         self.clips = clips
+        self.adjustmentSpans = adjustmentSpans
         loadTask?.cancel()
         removeEndObserver()
 
@@ -522,9 +566,10 @@ private final class TimelineSequenceVideoController: ObservableObject {
         }
 
         isLoading = true
+        let adjustmentSpans = adjustmentSpans
         loadTask = Task { @MainActor in
             do {
-                let result = try await Self.playerItem(for: clips)
+                let result = try await Self.playerItem(for: clips, adjustmentSpans: adjustmentSpans)
                 guard !Task.isCancelled else { return }
 
                 ranges = result.ranges
@@ -659,7 +704,10 @@ private final class TimelineSequenceVideoController: ObservableObject {
     }
 
     @MainActor
-    private static func playerItem(for clips: [TimelinePlaybackClip]) async throws -> TimelineSequenceBuildResult {
+    private static func playerItem(
+        for clips: [TimelinePlaybackClip],
+        adjustmentSpans: [TimelineAdjustmentSpan]
+    ) async throws -> TimelineSequenceBuildResult {
         let composition = AVMutableComposition()
         var instructions: [AVMutableVideoCompositionInstruction] = []
         var audioParameters: [AVMutableAudioMixInputParameters] = []
@@ -704,18 +752,14 @@ private final class TimelineSequenceVideoController: ObservableObject {
                 y: -transformedBounds.minY
             )
             let displayTransform = preferredTransform.concatenating(normalize)
-            let clipCrop = clip.crop ?? .full
-            let cropRect = clipCrop.pixelRect(in: displaySize)
-            let sourceCropRect = cropRect
-                .applying(displayTransform.inverted())
-                .standardized
-                .intersection(CGRect(origin: .zero, size: naturalSize))
-                .integral
-            let hasVisibleCrop = !clipCrop.isFullFrame && sourceCropRect.width > 1 && sourceCropRect.height > 1
             if renderSize == nil {
+                let timelineRenderSize = TimelineCropRenderer.renderSize(
+                    displaySize: displaySize,
+                    adjustmentSpans: adjustmentSpans
+                )
                 renderSize = CGSize(
-                    width: evenPlaybackDimension(displaySize.width),
-                    height: evenPlaybackDimension(displaySize.height)
+                    width: evenPlaybackDimension(timelineRenderSize.width),
+                    height: evenPlaybackDimension(timelineRenderSize.height)
                 )
             }
 
@@ -729,28 +773,15 @@ private final class TimelineSequenceVideoController: ObservableObject {
 
             let layerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: compositionVideoTrack)
             if let renderSize {
-                let scale = min(renderSize.width / max(displaySize.width, 1), renderSize.height / max(displaySize.height, 1))
-                let scaledSize = CGSize(width: displaySize.width * scale, height: displaySize.height * scale)
-                let displayFrame = CGRect(
-                    x: (renderSize.width - scaledSize.width) / 2,
-                    y: (renderSize.height - scaledSize.height) / 2,
-                    width: scaledSize.width,
-                    height: scaledSize.height
+                TimelineCropRenderer.applyTransformRamps(
+                    to: layerInstruction,
+                    timelineStart: cursor.seconds,
+                    timelineEnd: (cursor + sourceTimeRange.duration).seconds,
+                    displayTransform: displayTransform,
+                    displaySize: displaySize,
+                    renderSize: renderSize,
+                    adjustmentSpans: adjustmentSpans
                 )
-                let fit = CGAffineTransform(scaleX: scale, y: scale)
-                let center = CGAffineTransform(
-                    translationX: displayFrame.minX,
-                    y: displayFrame.minY
-                )
-                layerInstruction.setTransform(
-                    displayTransform
-                        .concatenating(fit)
-                        .concatenating(center),
-                    at: cursor
-                )
-                if hasVisibleCrop {
-                    layerInstruction.setCropRectangle(sourceCropRect, at: cursor)
-                }
             } else {
                 layerInstruction.setTransform(preferredTransform, at: cursor)
             }
