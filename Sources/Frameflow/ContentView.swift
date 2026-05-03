@@ -60,6 +60,8 @@ struct ContentView: View {
     @State private var isPlayerFillMode = false
     @State private var isTimelineDropTargeted = false
     @State private var timelineZoom = 1.75
+    @State private var timelineRulerWidth: CGFloat = 0
+    @State private var autoZoomedTimelineClipID: EditorTimelineClip.ID?
     @State private var timelinePlayheadDragStartTime: TimeInterval?
     @State private var isExportingTimeline = false
     @State private var activePanel: SidePanel = .thumbnail
@@ -1671,6 +1673,13 @@ struct ContentView: View {
             isTargeted: $isTimelineDropTargeted,
             perform: handleTimelineDrop
         )
+        .onChange(of: timelineClips.count) { oldValue, newValue in
+            if newValue == 0 {
+                autoZoomedTimelineClipID = nil
+            } else if oldValue == 0 && newValue == 1 {
+                autoZoomTimelineForFirstClip()
+            }
+        }
     }
 
     private var timelineBody: some View {
@@ -1688,6 +1697,10 @@ struct ContentView: View {
                 }
 
                 timelinePlayheadOverlay(in: geometry.size)
+            }
+            .onAppear { timelineRulerWidth = geometry.size.width }
+            .onChange(of: geometry.size.width) { _, newValue in
+                timelineRulerWidth = newValue
             }
         }
     }
@@ -3055,6 +3068,23 @@ struct ContentView: View {
         TimeInterval(max(width - timelineTrackHeaderWidth, 0) / max(timelinePixelsPerSecond, 0.1))
     }
 
+    private func autoZoomTimelineForFirstClip() {
+        guard let firstClip = timelineClips.first else { return }
+        guard autoZoomedTimelineClipID != firstClip.id else { return }
+        let duration = timelineDuration(for: firstClip)
+        guard duration > 0, timelineRulerWidth > 0 else { return }
+
+        let availableWidth = max(timelineRulerWidth - timelineTrackHeaderWidth, 1)
+        let targetFraction: CGFloat = 0.125
+        let rawZoom = (targetFraction * availableWidth) / (timelineBasePixelsPerSecond * CGFloat(duration))
+        let clamped = min(max(Double(rawZoom), timelineZoomRange.lowerBound), timelineZoomRange.upperBound)
+
+        autoZoomedTimelineClipID = firstClip.id
+        withAnimation(.easeInOut(duration: 0.25)) {
+            timelineZoom = clamped
+        }
+    }
+
     private func timelineClipWidth(for clip: EditorTimelineClip) -> CGFloat {
         max(CGFloat(timelineDuration(for: clip)) * timelinePixelsPerSecond, 18)
     }
@@ -3892,6 +3922,8 @@ struct ContentView: View {
         }
         editorClips[currentIndex].thumbnail = thumbnail
         editorClips[currentIndex].status = status
+
+        autoZoomTimelineForFirstClip()
 
         if editorClips[currentIndex].filmstrip == nil,
            clip.item.kind == .video,
