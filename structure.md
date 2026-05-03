@@ -2,6 +2,60 @@
 
 This document maps the main UI panels and controls to their names in the SwiftUI codebase.
 
+## Source Organization
+
+```text
+Sources/Frameflow/App
+├─ FrameflowApp.swift          app entry point and command menu
+├─ ContentView.swift           root layout, state coordination, app commands
+├─ MainPanelState.swift        main tab visibility and activation state
+├─ SidePanel.swift             thumbnail/pinned focus state
+├─ EditorDragPayload.swift     drag-and-drop payload encoding
+└─ EditorTheme.swift           theme IDs, palettes, environment value
+
+Sources/Frameflow/Domain
+├─ MediaItem.swift             supported media kind and identity
+├─ MediaMetadata.swift         display metadata model and loader
+├─ MediaSizing.swift           natural-size lookup
+├─ ExportModels.swift          pinned media and timeline export clip values
+├─ EditorTimelineModels.swift  composer clip and timeline clip state
+└─ FileFilter.swift            Finder-style wildcard file filtering
+
+Sources/Frameflow/Services
+├─ MediaLibrary.swift          folder scanning, expansion, thumbnail queue
+├─ MediaFilmstrip.swift        timeline filmstrip thumbnail generation
+├─ MediaSnapshot.swift         video-frame snapshot export
+├─ MediaExport.swift           export API and destination naming
+├─ MediaExport+PinnedMedia.swift
+├─ MediaExport+Timeline.swift
+├─ MediaExport+AnimatedWebPTimeline.swift
+├─ MediaExport+Geometry.swift
+├─ AnimatedWebPMuxer.swift
+├─ MediaExportError.swift
+└─ PinnedCopyResult.swift
+
+Sources/Frameflow/Support
+├─ KeyboardMonitor.swift
+├─ SplitViewResizeCursorInstaller.swift
+└─ UniqueCopyURL.swift
+
+Sources/Frameflow/Views
+├─ Composer/                   clip-bin views
+├─ Editing/                    trim controls
+├─ MediaLibrary/               folder and thumbnail rows
+├─ Preview/                    preview panes, crop overlay, native media views
+├─ Shared/                     reusable SwiftUI modifiers
+└─ Timeline/                   timeline blocks, drop delegates, shapes
+
+Sources/FrameflowCore
+└─ TimelineAdjustment.swift    crop, trim, adjustment spans, export crop renderer
+```
+
+Naming follows the app hierarchy: `Media*` types describe imported files and metadata,
+`Editor*` types belong to the Composer media bin, `Timeline*` types belong to timeline
+playback/export/editing, and view files use role words such as `Pane`, `Panel`, `Row`,
+`Block`, `Overlay`, and `Controls`.
+
 ```text
 ContentView
 └─ VStack
@@ -121,17 +175,17 @@ View menu
 
 ## Panel State
 
-The active side panel is tracked with `SidePanel` in `ContentView.swift`.
+The active side panel is tracked with `SidePanel` in `Sources/Frameflow/App/SidePanel.swift`.
 
 ```swift
-private enum SidePanel {
+enum SidePanel {
     case thumbnail
     case pinned
 }
 ```
 
 The active main panel tab and visible main panel tabs are tracked with `MainPanelTab` and
-`MainPanelState` in `MainPanelState.swift`.
+`MainPanelState` in `Sources/Frameflow/App/MainPanelState.swift`.
 
 ```swift
 enum MainPanelTab {
@@ -176,17 +230,18 @@ Export applies the active adjustment crop transforms to the output video.
 
 The editor player has two playback paths. When a media-bin clip is selected,
 `playerPane` still uses `PreviewPane` for single-clip preview. When a timeline clip is
-selected, `playerPane` uses `TimelineSequenceVideoView` from `NativeMediaViews.swift` to
-build an in-memory full-frame AV preview composition from the video timeline.
+selected, `playerPane` uses `TimelineSequenceVideoView` to build an in-memory full-frame
+AV preview composition from the video timeline.
 `timelinePlaybackTime` stores the sequence playhead time, `timelineSeekRequest` seeks the
 sequence when a timeline block is selected, and `TimelinePlaybackPosition` maps sequence
 time back to the active
 timeline clip and source media time for highlighting, split, and trim behavior.
 
-Phase 4 timeline export is handled by `MediaExport.exportTimeline`. `ContentView` converts
+Timeline export is handled by `MediaExport.exportTimeline`. `ContentView` converts
 `timelineClips` into `TimelineExportClip` values, including clip trims and audio volume /
 mute state, and passes adjustment spans separately so playback and export share the same
-timeline crop keyframes. Export currently supports video timeline clips.
+timeline crop keyframes. Export supports all-video MP4 timelines and all-WebP
+animated WebP timelines.
 
 Per-timeline-clip `EditorTimelineAdjustments` still stores render settings. The visible
 editor control surface currently exposes audio mute/volume in `playerPane`, and export
@@ -194,18 +249,26 @@ honors those audio settings.
 
 ## Code Anchors
 
-- Main app shell: `Sources/Frameflow/ContentView.swift`
-- Theme model and palettes: `Sources/Frameflow/EditorTheme.swift`
-- Main panel tab state: `Sources/Frameflow/MainPanelState.swift`
-- `thumbnailPanel`: `Sources/Frameflow/ContentView.swift`
-- `pinnedPanel`: `Sources/Frameflow/ContentView.swift`
-- `statusBar`: `Sources/Frameflow/ContentView.swift`
-- `mainPanelTabBar`, `activeWorkbench`, `quickSortWorkbench`, `composerWorkbench`: `Sources/Frameflow/ContentView.swift`
-- `clipsPane`, `playerPane`, `timelinePane`, `editingToolbar`, `previewPanel`: `Sources/Frameflow/ContentView.swift`
-- `TimelineSequenceVideoView`: `Sources/Frameflow/NativeMediaViews.swift`
-- timeline export: `Sources/Frameflow/MediaEditing.swift`
+- Main app shell and panel composition: `Sources/Frameflow/App/ContentView.swift`
+- Theme model and palettes: `Sources/Frameflow/App/EditorTheme.swift`
+- Main panel tab state: `Sources/Frameflow/App/MainPanelState.swift`
+- `thumbnailPanel`, `pinnedPanel`, `statusBar`: `Sources/Frameflow/App/ContentView.swift`
+- `mainPanelTabBar`, `activeWorkbench`, `quickSortWorkbench`, `composerWorkbench`: `Sources/Frameflow/App/ContentView.swift`
+- `clipsPane`, `playerPane`, `timelinePane`, `editingToolbar`, `previewPanel`: `Sources/Frameflow/App/ContentView.swift`
+- Clip-bin card view: `Sources/Frameflow/Views/Composer/EditorClipCard.swift`
+- Folder and thumbnail rows: `Sources/Frameflow/Views/MediaLibrary/ThumbnailRows.swift`
+- `TrimControls`: `Sources/Frameflow/Views/Editing/TrimControls.swift`
+- `PreviewPane`: `Sources/Frameflow/Views/Preview/PreviewPane.swift`
+- `CropOverlay`: `Sources/Frameflow/Views/Preview/CropOverlay.swift`
+- native image bridges: `Sources/Frameflow/Views/Preview/NativeImageViews.swift`
+- `NativeVideoView`, `NativeVideoControls`: `Sources/Frameflow/Views/Preview/NativeVideoView.swift`
+- `NativeVideoSurface`, `ZoomableNativeVideoSurface`: `Sources/Frameflow/Views/Preview/NativeVideoSurfaces.swift`
+- `TimelineSequenceVideoView`: `Sources/Frameflow/Views/Preview/TimelineSequenceVideoView.swift`
+- Timeline clip blocks and adjustment spans: `Sources/Frameflow/Views/Timeline/`
+- timeline export API: `Sources/Frameflow/Services/MediaExport.swift`
+- pinned export encoders: `Sources/Frameflow/Services/MediaExport+PinnedMedia.swift`
+- timeline export composition: `Sources/Frameflow/Services/MediaExport+Timeline.swift`
+- animated WebP muxing: `Sources/Frameflow/Services/AnimatedWebPMuxer.swift`
 - timeline adjustment crop model: `Sources/FrameflowCore/TimelineAdjustment.swift`
-- `TrimControls`: `Sources/Frameflow/ContentView.swift`
-- `PreviewPane`: `Sources/Frameflow/ContentView.swift`
-- `NativeVideoView`, `NativeVideoSurface`, `NativeVideoControls`: `Sources/Frameflow/NativeMediaViews.swift`
-- `quickTooltipOverlay`: `Sources/Frameflow/QuickTooltip.swift`
+- `KeyboardMonitor`: `Sources/Frameflow/Support/KeyboardMonitor.swift`
+- `quickTooltipOverlay`: `Sources/Frameflow/Views/Shared/QuickTooltip.swift`
