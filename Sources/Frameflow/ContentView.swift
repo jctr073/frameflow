@@ -626,22 +626,32 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .help(statusPathText)
 
-            Text(statusCountText)
+            Text(statusOpenFolderFileCount)
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(theme.secondaryText)
                 .lineLimit(1)
-                .help(statusCountText)
+                .help(statusOpenFolderFileCount)
 
-            if !selectedStatus.detailText.isEmpty {
+            Text("·")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(theme.mutedText)
+
+            Text(statusClipCount)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(theme.secondaryText)
+                .lineLimit(1)
+                .help(statusClipCount)
+
+            if !statusTimelineDuration.isEmpty {
                 Text("·")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(theme.mutedText)
 
-                Text(selectedStatus.detailText)
+                Text(statusTimelineDuration)
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(theme.secondaryText)
                     .lineLimit(1)
-                    .help(selectedStatus.detailText)
+                    .help(statusTimelineDuration)
             }
         }
         .frame(height: 36)
@@ -671,15 +681,27 @@ struct ContentView: View {
         return folderURL.path
     }
 
-    private var statusCountText: String {
+    private var statusOpenFolderFileCount: String {
         let count = library.items.count
-        let noun = count == 1 ? "file" : "files"
+        let noun = count == 1 ? "open file" : "open files"
         if filterText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return "\(count) \(noun)"
         }
 
         let visibleCount = visibleItems.count
         return "\(visibleCount) of \(count) \(noun)"
+    }
+
+    private var statusClipCount: String {
+        let count = timelineClips.count
+        let noun = count == 1 ? "clip" : "clips"
+        return "\(count) \(noun)"
+    }
+
+    private var statusTimelineDuration: String {
+        let duration = actualTimelineDuration
+        guard duration > 0 else { return "" }
+        return "Duration \(MediaTrim.format(duration))"
     }
 
     private var visibleThumbnailEntries: [ThumbnailPanelEntry] {
@@ -1478,8 +1500,8 @@ struct ContentView: View {
                 Button {
                     applyAdjustmentCropKeyframe()
                 } label: {
-                    Image(systemName: "diamond.fill")
-                        .font(.system(size: 12, weight: .medium))
+                    Image(systemName: "diamond")
+                        .font(.system(size: 13, weight: .medium))
                         .frame(width: 22, height: 22)
                 }
                 .buttonStyle(.plain)
@@ -1781,7 +1803,7 @@ struct ContentView: View {
     private func timelinePlayheadOverlay(in size: CGSize) -> some View {
         let clampedTime = clampedTimelinePlayheadTime(timelinePlaybackTime)
         let playheadX = timelineTrackHeaderWidth + CGFloat(clampedTime) * timelinePixelsPerSecond
-        let handleTopOffset: CGFloat = 1
+        let handleTopOffset = timelineRulerHeight - timelinePlayheadHandleSize.height
         let lineTop = handleTopOffset + timelinePlayheadHandleSize.height - 1
 
         return ZStack(alignment: .topLeading) {
@@ -5378,21 +5400,34 @@ private struct CropOverlay: View {
 
             ZStack(alignment: .topLeading) {
                 CropDimShape(cropRect: cropRect)
-                    .fill(Color.black.opacity(0.70), style: FillStyle(eoFill: true))
+                    .fill(Color.black.opacity(0.62), style: FillStyle(eoFill: true))
                     .allowsHitTesting(false)
 
                 Rectangle()
-                    .strokeBorder(Color.white, lineWidth: 1)
-                    .background(Color.white.opacity(0.001))
+                    .fill(Color.white.opacity(0.001))
                     .frame(width: cropRect.width, height: cropRect.height)
                     .position(x: cropRect.midX, y: cropRect.midY)
                     .gesture(moveGesture(in: geometry.size))
                     .allowsHitTesting(isEditable)
 
+                if isEditable {
+                    CropThirdsGuide(rect: cropRect)
+                        .stroke(Color.white.opacity(0.22), lineWidth: 0.6)
+                        .allowsHitTesting(false)
+                }
+
+                Rectangle()
+                    .strokeBorder(Color.black.opacity(0.45), lineWidth: 0.75)
+                    .frame(width: cropRect.width + 1.5, height: cropRect.height + 1.5)
+                    .position(x: cropRect.midX, y: cropRect.midY)
+                    .allowsHitTesting(false)
+
                 Rectangle()
                     .strokeBorder(
-                        accentColor,
-                        style: StrokeStyle(lineWidth: 2, dash: usesDashedOutline ? [7, 5] : [])
+                        accentColor.opacity(isEditable ? 0.95 : 0.85),
+                        style: isEditable
+                            ? StrokeStyle(lineWidth: 1.25)
+                            : StrokeStyle(lineWidth: 1.5, dash: usesDashedOutline ? [7, 5] : [])
                     )
                     .frame(width: cropRect.width, height: cropRect.height)
                     .position(x: cropRect.midX, y: cropRect.midY)
@@ -5400,11 +5435,25 @@ private struct CropOverlay: View {
 
                 if isEditable {
                     ForEach(CropHandle.allCases) { handle in
-                        Rectangle()
-                            .fill(accentColor)
-                            .frame(width: 12, height: 12)
-                            .position(handle.position(in: cropRect))
-                            .gesture(resizeGesture(handle: handle, in: geometry.size))
+                        ZStack {
+                            Rectangle()
+                                .fill(Color.white.opacity(0.001))
+                                .frame(width: 30, height: 30)
+
+                            if handle.isCorner {
+                                CropCornerBracket(corner: handle, armLength: 16, thickness: 3)
+                                    .fill(accentColor)
+                                    .frame(width: 32, height: 32)
+                            } else if let size = handle.edgeCapsuleSize {
+                                Capsule()
+                                    .fill(accentColor)
+                                    .frame(width: size.width, height: size.height)
+                            }
+                        }
+                        .shadow(color: Color.black.opacity(0.35), radius: 1.5, x: 0, y: 0.5)
+                        .contentShape(Rectangle())
+                        .position(handle.position(in: cropRect))
+                        .gesture(resizeGesture(handle: handle, in: geometry.size))
                     }
 
                     if !crop.isFullFrame {
@@ -5420,6 +5469,7 @@ private struct CropOverlay: View {
                         .buttonStyle(.plain)
                         .foregroundStyle(.white)
                         .background(theme.accent, in: Capsule())
+                        .shadow(color: Color.black.opacity(0.35), radius: 4, x: 0, y: 1)
                         .position(
                             x: min(max(cropRect.maxX - 38, 42), geometry.size.width - 42),
                             y: min(max(cropRect.minY + 22, 22), geometry.size.height - 22)
@@ -5476,6 +5526,60 @@ private struct CropDimShape: Shape {
     }
 }
 
+private struct CropThirdsGuide: Shape {
+    let rect: CGRect
+
+    func path(in _: CGRect) -> Path {
+        var path = Path()
+        let widthThird = rect.width / 3
+        let heightThird = rect.height / 3
+
+        for column in 1...2 {
+            let x = rect.minX + widthThird * CGFloat(column)
+            path.move(to: CGPoint(x: x, y: rect.minY))
+            path.addLine(to: CGPoint(x: x, y: rect.maxY))
+        }
+
+        for row in 1...2 {
+            let y = rect.minY + heightThird * CGFloat(row)
+            path.move(to: CGPoint(x: rect.minX, y: y))
+            path.addLine(to: CGPoint(x: rect.maxX, y: y))
+        }
+        return path
+    }
+}
+
+private struct CropCornerBracket: Shape {
+    let corner: CropHandle
+    let armLength: CGFloat
+    let thickness: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let mid = CGPoint(x: rect.midX, y: rect.midY)
+        let arm = armLength
+        let thick = thickness
+
+        switch corner {
+        case .topLeading:
+            path.addRect(CGRect(x: mid.x, y: mid.y, width: arm, height: thick))
+            path.addRect(CGRect(x: mid.x, y: mid.y, width: thick, height: arm))
+        case .topTrailing:
+            path.addRect(CGRect(x: mid.x - arm, y: mid.y, width: arm, height: thick))
+            path.addRect(CGRect(x: mid.x - thick, y: mid.y, width: thick, height: arm))
+        case .bottomLeading:
+            path.addRect(CGRect(x: mid.x, y: mid.y - thick, width: arm, height: thick))
+            path.addRect(CGRect(x: mid.x, y: mid.y - arm, width: thick, height: arm))
+        case .bottomTrailing:
+            path.addRect(CGRect(x: mid.x - arm, y: mid.y - thick, width: arm, height: thick))
+            path.addRect(CGRect(x: mid.x - thick, y: mid.y - arm, width: thick, height: arm))
+        default:
+            break
+        }
+        return path
+    }
+}
+
 private enum CropHandle: CaseIterable, Identifiable {
     case topLeading
     case top
@@ -5506,6 +5610,26 @@ private enum CropHandle: CaseIterable, Identifiable {
             CGPoint(x: rect.minX, y: rect.maxY)
         case .leading:
             CGPoint(x: rect.minX, y: rect.midY)
+        }
+    }
+
+    var isCorner: Bool {
+        switch self {
+        case .topLeading, .topTrailing, .bottomLeading, .bottomTrailing:
+            return true
+        case .top, .bottom, .leading, .trailing:
+            return false
+        }
+    }
+
+    var edgeCapsuleSize: CGSize? {
+        switch self {
+        case .top, .bottom:
+            return CGSize(width: 26, height: 3.5)
+        case .leading, .trailing:
+            return CGSize(width: 3.5, height: 26)
+        case .topLeading, .topTrailing, .bottomLeading, .bottomTrailing:
+            return nil
         }
     }
 
