@@ -12,7 +12,7 @@ Frameflow is a native macOS media sorting and lightweight video composition tool
 - Build video timelines from imported clips with drag-and-drop ordering.
 - Trim, split, reorder, mute, and adjust volume on timeline clips.
 - Add timeline crop adjustment spans with keyframes and interpolated crop motion.
-- Export the timeline as an MP4 file.
+- Export video timelines as MP4 files and all-WebP timelines as animated WebP files.
 - Switch between built-in color themes from the macOS View menu.
 
 ## Requirements
@@ -114,7 +114,18 @@ The current test target is a small executable test runner for core timeline adju
 
 ```text
 Sources/
-  Frameflow/       macOS app UI, media browsing, preview, editor, export wiring
+  Frameflow/
+    App/           app entry point, root shell, app-level UI state, theme
+    Domain/        media, export, filter, and editor timeline value models
+    Services/      folder scanning, metadata, thumbnails, snapshots, export
+    Support/       AppKit integration and small shared utilities
+    Views/         SwiftUI/AppKit view components grouped by feature area
+      Composer/    clip-bin cards and composer controls
+      Editing/     crop/trim editing controls
+      MediaLibrary/thumbnail and folder rows
+      Preview/     media preview, native media bridges, crop overlay
+      Shared/      cross-feature SwiftUI helpers
+      Timeline/    timeline ruler, clip blocks, adjustment spans, shapes
   FrameflowCore/   shared crop, trim, and timeline adjustment logic
 Tests/
   FrameflowLogicTests/  executable logic tests
@@ -125,8 +136,14 @@ scripts/
 structure.md            UI and code map for maintainers
 ```
 
+The app target intentionally keeps UI, domain values, and media services in separate
+folders even though Swift Package Manager does not require that structure. File names
+match their primary type where possible; larger service surfaces use Swift extension
+files such as `MediaExport+Timeline.swift` and `MediaExport+PinnedMedia.swift` so each
+file has a focused responsibility.
+
 ## Notes
 
-- Timeline export currently supports video clips and writes MP4 output.
+- Timeline export supports all-video MP4 output and all-WebP animated WebP output.
 - Pinned media export preserves unedited files by copying them, while edited images, GIFs, WebP files, and videos are rendered to new files.
 - No license file is included yet. Add one before distributing the project publicly.
