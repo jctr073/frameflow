@@ -1317,7 +1317,7 @@ struct ContentView: View {
         if let short = info["CFBundleShortVersionString"] as? String, !short.isEmpty {
             return short
         }
-        return "1.0.1"
+        return "1.1.0"
     }
 
     private var previewMainPanel: some View {
