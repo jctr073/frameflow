@@ -21,12 +21,13 @@ struct TimelineAdjustmentSpanBlock: View {
 
     private let cornerRadius: CGFloat = 4
     private let labelHeight: CGFloat = 16
-    private let yellowFill = Color(red: 0.96, green: 0.78, blue: 0.18)
-    private let yellowFillSelected = Color(red: 1.00, green: 0.86, blue: 0.30)
-    private let yellowLabel = Color(red: 0.88, green: 0.66, blue: 0.10)
-    private let yellowLabelSelected = Color(red: 0.96, green: 0.74, blue: 0.14)
-    private let selectionOutlineColor = Color(red: 0.86, green: 0.42, blue: 0.08)
-    private let pairedOutlineColor = Color(red: 1.00, green: 0.62, blue: 0.10)
+
+    private var fillColor: Color { theme.accent.opacity(0.92) }
+    private var fillColorSelected: Color { theme.accent }
+    private var labelBackground: Color { theme.accent.opacity(0.78) }
+    private var labelBackgroundSelected: Color { theme.accent.opacity(0.88) }
+    private var selectionOutlineColor: Color { theme.accent }
+    private var pairedOutlineColor: Color { theme.accent }
 
     var body: some View {
         GeometryReader { geometry in
@@ -38,15 +39,15 @@ struct TimelineAdjustmentSpanBlock: View {
             VStack(spacing: 0) {
                 ZStack(alignment: .leading) {
                     Rectangle()
-                        .fill(isSelected ? yellowFillSelected : yellowFill)
+                        .fill(isSelected ? fillColorSelected : fillColor)
 
                     ForEach(span.sortedKeyframes) { keyframe in
                         Diamond()
-                            .fill(Color.white)
+                            .fill(theme.accentText)
                             .overlay {
                                 Diamond()
                                     .stroke(
-                                        draggingKeyframeID == keyframe.id ? theme.accent : Color.black.opacity(0.45),
+                                        draggingKeyframeID == keyframe.id ? theme.accentText : theme.accentText.opacity(0.45),
                                         lineWidth: draggingKeyframeID == keyframe.id ? 1.5 : 1
                                     )
                             }
@@ -78,11 +79,11 @@ struct TimelineAdjustmentSpanBlock: View {
                                 .lineLimit(1)
                         }
                     }
-                    .foregroundStyle(Color.black.opacity(0.78))
+                    .foregroundStyle(theme.accentText)
                     .padding(.horizontal, 6)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .frame(height: labelHeight)
-                    .background(isSelected ? yellowLabelSelected : yellowLabel)
+                    .background(isSelected ? labelBackgroundSelected : labelBackground)
                     .allowsHitTesting(false)
                 }
             }

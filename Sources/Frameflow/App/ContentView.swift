@@ -50,13 +50,19 @@ struct ContentView: View {
     @State private var trimRanges: [URL: MediaTrim] = [:]
     @State private var appliedCrops: [URL: NormalizedCrop] = [:]
     @State private var appliedTrims: [URL: MediaTrim] = [:]
+    @State private var showTweaksPanel: Bool = false
+
+    @Binding private var tweakThemeID: EditorThemeID
+    @Binding private var tweakDensity: TweakDensity
+    @Binding private var tweakMonoTimecodes: Bool
+    @Binding private var tweakShowTechSpecs: Bool
 
     private let initialFolderURL: URL?
     private let zoomLevels = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0]
     private let playerZoomRange = 0.25...4.0
     private let playerZoomStep = 0.25
     private let sidePanelRowInsets = EdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 10)
-    private let topToolbarHeight: CGFloat = 48
+    private let topToolbarHeight: CGFloat = 44
     private let timelineBasePixelsPerSecond: CGFloat = 12
     private let timelineRulerHeight: CGFloat = 34
     private let timelineAdjustmentLayerHeight: CGFloat = 44
@@ -64,14 +70,25 @@ struct ContentView: View {
     private let timelineTrackHeaderWidth: CGFloat = 64
     private let timelineRulerLabelTrailingPadding: CGFloat = 72
     private let timelineZoomRange = 0.05...12.0
-    private let timelinePlayheadColor = Color(red: 0.96, green: 0.30, blue: 0.10)
-    private let timelineSelectionOutlineColor = Color(red: 0.86, green: 0.42, blue: 0.08)
+    private var timelinePlayheadColor: Color { theme.danger }
+    private var timelineSelectionOutlineColor: Color { theme.accent }
     private let timelinePlayheadHandleSize = CGSize(width: 14, height: 16)
     private let timelinePlayheadHitWidth: CGFloat = 32
 
-    init(initialFolderURL: URL?, mainPanelState: MainPanelState) {
+    init(
+        initialFolderURL: URL?,
+        mainPanelState: MainPanelState,
+        themeID: Binding<EditorThemeID>,
+        density: Binding<TweakDensity>,
+        monoTimecodes: Binding<Bool>,
+        showTechSpecs: Binding<Bool>
+    ) {
         self.initialFolderURL = initialFolderURL
         self.mainPanelState = mainPanelState
+        self._tweakThemeID = themeID
+        self._tweakDensity = density
+        self._tweakMonoTimecodes = monoTimecodes
+        self._tweakShowTechSpecs = showTechSpecs
     }
 
     var body: some View {
@@ -91,8 +108,22 @@ struct ContentView: View {
         .clipShape(RoundedRectangle(cornerRadius: 16))
         .tint(theme.accent)
         .accentColor(theme.accent)
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(theme.kind == .light ? .light : .dark)
         .overlay(dropOverlay)
+        .overlay(alignment: .bottomTrailing) {
+            if showTweaksPanel {
+                TweaksPanel(
+                    themeID: $tweakThemeID,
+                    density: $tweakDensity,
+                    monoTimecodes: $tweakMonoTimecodes,
+                    showTechSpecs: $tweakShowTechSpecs,
+                    isPresented: $showTweaksPanel
+                )
+                .padding(16)
+                .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottomTrailing)))
+            }
+        }
+        .animation(.easeOut(duration: 0.15), value: showTweaksPanel)
         .quickTooltipOverlay()
         .background(KeyboardMonitor(onKeyDown: handleKeyDown).frame(width: 0, height: 0))
         .background(SplitViewResizeCursorInstaller().frame(width: 0, height: 0))
@@ -261,14 +292,14 @@ struct ContentView: View {
         HStack(spacing: 6) {
             content()
         }
-        .frame(height: 30)
+        .frame(height: 32)
         .padding(.horizontal, 10)
         .foregroundStyle(theme.primaryText)
-        .background(theme.toolbarBackground)
+        .background(theme.panelBackground)
         .overlay(alignment: .bottom) {
             Rectangle()
                 .fill(theme.hairline)
-                .frame(height: 1)
+                .frame(height: 0.5)
         }
     }
 
@@ -278,21 +309,22 @@ struct ContentView: View {
         @ViewBuilder actions: () -> Actions
     ) -> some View {
         panelHeader {
-            Text(title)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(theme.secondaryText)
+            Text(title.uppercased())
+                .font(.system(size: 11, weight: .medium))
+                .tracking(0.4)
+                .foregroundStyle(theme.primaryText)
                 .lineLimit(1)
+
+            if let trailing {
+                Text(trailing)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(theme.mutedText)
+                    .lineLimit(1)
+            }
 
             Spacer(minLength: 0)
 
             actions()
-
-            if let trailing {
-                Text(trailing)
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundStyle(theme.mutedText)
-                    .lineLimit(1)
-            }
         }
     }
 
@@ -560,81 +592,93 @@ struct ContentView: View {
     }
 
     private var statusBar: some View {
-        HStack(spacing: 12) {
-            Button {
+        HStack(spacing: 10) {
+            statusBarButton(systemImage: "square.and.arrow.up", tooltip: "Open Folder") {
                 chooseFolder()
-            } label: {
-                Image(systemName: "tray.and.arrow.up")
-                    .font(.system(size: 13, weight: .medium))
-                    .frame(width: 24, height: 24)
             }
-            .buttonStyle(.plain)
             .keyboardShortcut("o", modifiers: .command)
-            .quickTooltip("Open Folder")
-            .accessibilityLabel("Open Folder")
 
-            Button {
+            statusBarButton(
+                systemImage: "terminal",
+                tooltip: "Open Terminal Here",
+                disabled: library.folderURL == nil
+            ) {
                 openTerminalAtCurrentFolder()
-            } label: {
-                Image(systemName: "terminal")
-                    .font(.system(size: 13, weight: .medium))
-                    .frame(width: 24, height: 24)
             }
-            .buttonStyle(.plain)
-            .disabled(library.folderURL == nil)
-            .quickTooltip("Open Terminal Here")
-            .accessibilityLabel("Open Terminal Here")
 
             Circle()
                 .fill(theme.accent)
-                .frame(width: 10, height: 10)
+                .frame(width: 6, height: 6)
+                .shadow(color: theme.accent.opacity(0.55), radius: 4)
+                .padding(.horizontal, 2)
 
             Text(statusPathText)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(theme.secondaryText)
+                .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                .tracking(0.1)
+                .foregroundStyle(theme.primaryText)
                 .lineLimit(1)
                 .truncationMode(.middle)
-                .frame(maxWidth: .infinity, alignment: .leading)
                 .help(statusPathText)
 
+            statusDot
+
             Text(statusOpenFolderFileCount)
-                .font(.system(size: 13, weight: .medium))
+                .font(.system(size: 10.5, design: .monospaced))
                 .foregroundStyle(theme.secondaryText)
                 .lineLimit(1)
                 .help(statusOpenFolderFileCount)
 
-            Text("·")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(theme.mutedText)
+            Spacer(minLength: 0)
 
             Text(statusClipCount)
-                .font(.system(size: 13, weight: .medium))
+                .font(.system(size: 10.5, design: .monospaced))
                 .foregroundStyle(theme.secondaryText)
                 .lineLimit(1)
                 .help(statusClipCount)
 
             if !statusTimelineDuration.isEmpty {
-                Text("·")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(theme.mutedText)
+                statusDot
 
                 Text(statusTimelineDuration)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(theme.secondaryText)
+                    .font(.system(size: 10.5, design: .monospaced))
+                    .foregroundStyle(theme.primaryText)
                     .lineLimit(1)
                     .help(statusTimelineDuration)
             }
         }
-        .frame(height: 36)
-        .padding(.leading, 18)
-        .padding(.trailing, 24)
-        .foregroundStyle(theme.primaryText)
+        .frame(height: 24)
+        .padding(.horizontal, 10)
         .background(theme.toolbarBackground)
         .overlay(alignment: .top) {
             Rectangle()
                 .fill(theme.hairline)
-                .frame(height: 1)
+                .frame(height: 0.5)
         }
+    }
+
+    private var statusDot: some View {
+        Text("·")
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(theme.mutedText)
+    }
+
+    @ViewBuilder
+    private func statusBarButton(
+        systemImage: String,
+        tooltip: String,
+        disabled: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(disabled ? theme.mutedText : theme.secondaryText)
+                .frame(width: 20, height: 20)
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .quickTooltip(tooltip)
+        .accessibilityLabel(tooltip)
     }
 
     private var statusPathText: String {
@@ -1116,64 +1160,164 @@ struct ContentView: View {
 
     private var mainPanelTabBar: some View {
         ZStack {
-            HStack(spacing: 0) {
+            HStack(spacing: 8) {
+                brandCluster
+
                 Spacer(minLength: 0)
 
-                Button {
-                    exportTimeline()
-                } label: {
-                    if isExportingTimeline {
-                        ProgressView()
-                            .controlSize(.small)
-                            .frame(width: 86, height: 38)
-                    } else {
-                        Text("Export")
-                            .font(.system(size: 14, weight: .bold))
-                            .frame(width: 86, height: 38)
-                    }
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(theme.accentText)
-                .background(theme.accent, in: RoundedRectangle(cornerRadius: 7))
-                .disabled(timelineClips.isEmpty || isExportingTimeline)
-                .quickTooltip("Export Timeline")
-                .accessibilityLabel("Export Timeline")
+                readyPill
+
+                tweaksToggleButton
+
+                exportButton
             }
 
             HStack(spacing: 0) {
                 ForEach(visibleEditorTabs) { tab in
-                    let isActive = mainPanelState.activeTab == tab
-                    Button {
-                        mainPanelState.activate(tab)
-                    } label: {
-                        Text(tab.title)
-                            .font(.system(size: 14, weight: .semibold))
-                            .lineLimit(1)
-                            .frame(width: 112, height: topToolbarHeight)
-                            .background(isActive ? theme.panelRaised : Color.clear)
-                            .overlay(alignment: .top) {
-                                if isActive {
-                                    Rectangle()
-                                        .fill(theme.accent)
-                                        .frame(height: 3)
-                                }
-                            }
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(isActive ? theme.primaryText : theme.secondaryText)
-                    .accessibilityLabel(tab.title)
+                    tabBarItem(for: tab)
                 }
             }
         }
         .frame(height: topToolbarHeight)
-        .padding(.leading, 16)
-        .padding(.trailing, 16)
-        .background(theme.toolbarBackground)
+        .padding(.horizontal, 12)
+        .background(theme.windowBackground)
         .overlay(alignment: .bottom) {
             Rectangle()
                 .fill(theme.hairline)
-                .frame(height: 1)
+                .frame(height: 0.5)
         }
+    }
+
+    private var brandCluster: some View {
+        HStack(spacing: 8) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(
+                        LinearGradient(
+                            colors: [theme.accent, theme.accent.opacity(0.6)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 4)
+                            .stroke(theme.accent.opacity(0.4), lineWidth: 0.5)
+                    )
+
+                Text("F")
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundStyle(theme.accentText)
+            }
+            .frame(width: 18, height: 18)
+
+            Text("Frameflow")
+                .font(.system(size: 12, weight: .medium))
+                .tracking(0.2)
+                .foregroundStyle(theme.primaryText)
+
+            Text("v\(appVersionString)")
+                .font(.system(size: 10, weight: .regular, design: .monospaced))
+                .foregroundStyle(theme.mutedText)
+                .padding(.leading, 2)
+        }
+    }
+
+    private var readyPill: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(Color(red: 0.365, green: 0.827, blue: 0.620))
+                .frame(width: 5, height: 5)
+                .shadow(color: Color(red: 0.365, green: 0.827, blue: 0.620).opacity(0.55), radius: 3)
+
+            Text("READY")
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .tracking(0.4)
+                .foregroundStyle(theme.secondaryText)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .overlay(
+            RoundedRectangle(cornerRadius: 4)
+                .stroke(theme.hairline, lineWidth: 0.5)
+        )
+    }
+
+    private var tweaksToggleButton: some View {
+        Button {
+            showTweaksPanel.toggle()
+        } label: {
+            Image(systemName: "slider.horizontal.3")
+                .font(.system(size: 11, weight: .medium))
+                .frame(width: 24, height: 24)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(showTweaksPanel ? theme.primaryText : theme.secondaryText)
+        .background(showTweaksPanel ? theme.strongHairline : Color.clear, in: RoundedRectangle(cornerRadius: 4))
+        .keyboardShortcut(",", modifiers: .command)
+        .quickTooltip("Tweaks (⌘,)")
+        .accessibilityLabel("Toggle Tweaks Panel")
+    }
+
+    private var exportButton: some View {
+        Button {
+            exportTimeline()
+        } label: {
+            if isExportingTimeline {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(width: 80, height: 24)
+            } else {
+                HStack(spacing: 6) {
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text("Export")
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .tracking(0.1)
+                }
+                .frame(height: 24)
+                .padding(.horizontal, 14)
+            }
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(theme.accentText)
+        .background(theme.accent, in: RoundedRectangle(cornerRadius: 4))
+        .disabled(timelineClips.isEmpty || isExportingTimeline)
+        .quickTooltip("Export Timeline")
+        .accessibilityLabel("Export Timeline")
+    }
+
+    @ViewBuilder
+    private func tabBarItem(for tab: MainPanelTab) -> some View {
+        let isActive = mainPanelState.activeTab == tab
+        Button {
+            mainPanelState.activate(tab)
+        } label: {
+            Text(tab.title)
+                .font(.system(size: 12, weight: isActive ? .medium : .regular))
+                .tracking(0.15)
+                .lineLimit(1)
+                .frame(height: topToolbarHeight)
+                .padding(.horizontal, 22)
+                .overlay(alignment: .bottom) {
+                    if isActive {
+                        Rectangle()
+                            .fill(theme.accent)
+                            .frame(height: 1.5)
+                            .padding(.horizontal, 14)
+                    }
+                }
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(isActive ? theme.primaryText : theme.secondaryText)
+        .accessibilityLabel(tab.title)
+    }
+
+    private var appVersionString: String {
+        let info = Bundle.main.infoDictionary ?? [:]
+        if let short = info["CFBundleShortVersionString"] as? String, !short.isEmpty {
+            return short
+        }
+        return "1.0.1"
     }
 
     private var previewMainPanel: some View {
@@ -1185,30 +1329,97 @@ struct ContentView: View {
     }
 
     private var mediaPreviewHeader: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 12) {
             Text(selectedItem?.fileName ?? "No media selected")
-                .font(.system(size: 13, weight: .semibold))
+                .font(.system(size: 12, weight: .medium, design: .monospaced))
                 .foregroundStyle(theme.primaryText)
                 .lineLimit(1)
                 .truncationMode(.middle)
-                .frame(maxWidth: .infinity, alignment: .leading)
                 .help(selectedItem?.url.path ?? "No media selected")
 
-            if !selectedStatus.detailText.isEmpty {
-                Text(selectedStatus.detailText)
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(theme.secondaryText)
-                    .lineLimit(1)
+            HStack(spacing: 6) {
+                ForEach(previewHeaderSpecChips, id: \.self) { chip in
+                    specChip(chip)
+                }
+            }
+
+            Spacer(minLength: 0)
+
+            if let dimensions = previewHeaderDimensionsText {
+                metadataLabel(dimensions, emphasis: false)
+                metadataDot
+            }
+
+            if let duration = previewHeaderDurationText {
+                metadataLabel(duration, emphasis: true)
             }
         }
-        .frame(height: 44)
-        .padding(.horizontal, 16)
+        .frame(height: 36)
+        .padding(.horizontal, 12)
         .background(theme.toolbarBackground)
         .overlay(alignment: .bottom) {
             Rectangle()
                 .fill(theme.hairline)
-                .frame(height: 1)
+                .frame(height: 0.5)
         }
+    }
+
+    private var previewHeaderSpecChips: [String] {
+        guard let size = selectedStatus.size else { return [] }
+        var chips: [String] = []
+        let longEdge = max(size.width, size.height)
+        switch longEdge {
+        case 7000...:   chips.append("8K")
+        case 3500..<7000: chips.append("4K")
+        case 1900..<3500: chips.append("HD")
+        case 1200..<1900: chips.append("FHD")
+        default:        break
+        }
+        if let kind = selectedItem?.kind {
+            switch kind {
+            case .video: chips.append("VIDEO")
+            case .gif:   chips.append("GIF")
+            case .image: chips.append("IMAGE")
+            case .webp:  chips.append("WEBP")
+            }
+        }
+        return chips
+    }
+
+    private var previewHeaderDimensionsText: String? {
+        guard let size = selectedStatus.size else { return nil }
+        return "\(Int(size.width)) × \(Int(size.height))"
+    }
+
+    private var previewHeaderDurationText: String? {
+        guard let duration = selectedStatus.duration else { return nil }
+        return MediaTrim.format(duration)
+    }
+
+    private func specChip(_ label: String) -> some View {
+        Text(label)
+            .font(.system(size: 9, design: .monospaced))
+            .tracking(0.6)
+            .foregroundStyle(theme.secondaryText)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1.5)
+            .overlay(
+                RoundedRectangle(cornerRadius: 2)
+                    .stroke(theme.hairline, lineWidth: 0.5)
+            )
+    }
+
+    private func metadataLabel(_ text: String, emphasis: Bool) -> some View {
+        Text(text)
+            .font(.system(size: 11, design: .monospaced))
+            .foregroundStyle(emphasis ? theme.primaryText : theme.secondaryText)
+            .lineLimit(1)
+    }
+
+    private var metadataDot: some View {
+        Text("·")
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(theme.mutedText)
     }
 
     private var clipsPane: some View {

@@ -4,6 +4,9 @@ import SwiftUI
 struct FrameflowApp: App {
     @StateObject private var mainPanelState = MainPanelState()
     @AppStorage("editorThemeID") private var editorThemeRawValue = EditorThemeID.amberStudio.rawValue
+    @AppStorage("tweakDensity") private var densityRawValue = TweakDensity.regular.rawValue
+    @AppStorage("tweakMonoTimecodes") private var monoTimecodes = true
+    @AppStorage("tweakShowTechSpecs") private var showTechSpecs = true
 
     private let initialFolderURL: URL?
 
@@ -22,9 +25,22 @@ struct FrameflowApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView(initialFolderURL: initialFolderURL, mainPanelState: mainPanelState)
-                .environment(\.editorTheme, selectedTheme.palette)
-                .frame(minWidth: 760, minHeight: 500)
+            ContentView(
+                initialFolderURL: initialFolderURL,
+                mainPanelState: mainPanelState,
+                themeID: Binding(
+                    get: { selectedTheme },
+                    set: { editorThemeRawValue = $0.rawValue }
+                ),
+                density: Binding(
+                    get: { TweakDensity(rawValue: densityRawValue) ?? .regular },
+                    set: { densityRawValue = $0.rawValue }
+                ),
+                monoTimecodes: $monoTimecodes,
+                showTechSpecs: $showTechSpecs
+            )
+            .environment(\.editorTheme, selectedTheme.palette)
+            .frame(minWidth: 760, minHeight: 500)
         }
         .commands {
             CommandGroup(replacing: .newItem) { }

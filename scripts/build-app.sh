@@ -3,9 +3,13 @@ set -euo pipefail
 
 APP_NAME="Frameflow"
 BUNDLE_ID="com.local.Frameflow"
-VERSION="0.1.0"
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+VERSION_FILE="$ROOT_DIR/VERSION"
+VERSION="$(sed -n 1p "$VERSION_FILE" | tr -d '[:space:]')"
+BUILD_NUMBER="$(sed -n 2p "$VERSION_FILE" | tr -d '[:space:]')"
+: "${VERSION:?VERSION file is missing the marketing version on line 1}"
+: "${BUILD_NUMBER:?VERSION file is missing the build number on line 2}"
 APP_DIR="$ROOT_DIR/.build/app/$APP_NAME.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
@@ -54,7 +58,7 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
     <key>CFBundleShortVersionString</key>
     <string>$VERSION</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>$BUILD_NUMBER</string>
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.utilities</string>
     <key>LSMinimumSystemVersion</key>
