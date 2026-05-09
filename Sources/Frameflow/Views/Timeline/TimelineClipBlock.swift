@@ -19,8 +19,9 @@ struct TimelineClipBlock: View {
 
     private let cornerRadius: CGFloat = 4
     private let labelHeight: CGFloat = 20
-    private let selectionOutlineColor = Color(red: 0.86, green: 0.42, blue: 0.08)
-    private let pairedOutlineColor = Color(red: 1.00, green: 0.62, blue: 0.10)
+
+    private var selectionOutlineColor: Color { theme.accent }
+    private var pairedOutlineColor: Color { theme.accent }
 
     var body: some View {
         GeometryReader { geometry in
@@ -66,16 +67,25 @@ struct TimelineClipBlock: View {
                 .clipped()
 
                 if showsLabel {
-                    Text(sourceClip?.item.fileName ?? "Missing Clip")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .padding(.horizontal, 6)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .frame(height: labelHeight)
-                        .background(isSelected ? theme.clipBlueSelected : theme.clipBlue)
-                        .help(detailText)
+                    HStack(spacing: 6) {
+                        Text(sourceClip?.item.fileName ?? "Missing Clip")
+                            .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(theme.clipText)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+
+                        Spacer(minLength: 0)
+
+                        Text(MediaTrim.format(trim.duration))
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundStyle(theme.clipText.opacity(0.7))
+                            .lineLimit(1)
+                    }
+                    .padding(.horizontal, 6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(height: labelHeight)
+                    .background(isSelected ? theme.clipBlueSelected : theme.clipBlue)
+                    .help(detailText)
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius))

@@ -13,7 +13,8 @@ Frameflow is a native macOS media sorting and lightweight video composition tool
 - Trim, split, reorder, mute, and adjust volume on timeline clips.
 - Add timeline crop adjustment spans with keyframes and interpolated crop motion.
 - Export video timelines as MP4 files and all-WebP timelines as animated WebP files.
-- Switch between built-in color themes from the macOS View menu.
+- Switch between built-in dark and light color themes from the macOS View menu or the Tweaks panel.
+- Tweak editor density and timecode/tech-spec display from the Tweaks panel (`Command-,`).
 
 ## Requirements
 
@@ -93,6 +94,7 @@ The install script uses `sudo` only when `/Applications` is not writable by the 
 - `Escape`: clear an active crop or trim.
 - Arrow keys: nudge an active adjustment crop in Composer.
 - View menu: show or hide the Quick Sort and Composer panels, or switch color themes.
+- `Command-,`: toggle the Tweaks panel for themes, density, and timecode preferences.
 
 ## Development
 

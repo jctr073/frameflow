@@ -5,34 +5,54 @@ enum EditorThemeID: String, CaseIterable, Identifiable {
     case amberStudio
     case resolveTeal
     case finalCutSapphire
+    case graphiteMono
+    case ultraviolet
+    case crimsonLab
+    case forestConsole
+    case copperPrint
+    case polarIce
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .amberStudio:
-            return "Amber studio"
-        case .resolveTeal:
-            return "Resolve teal"
-        case .finalCutSapphire:
-            return "Final cut sapphire"
+        case .amberStudio:       return "Amber Studio"
+        case .resolveTeal:       return "Resolve Teal"
+        case .finalCutSapphire:  return "Final Cut Sapphire"
+        case .graphiteMono:      return "Graphite Mono"
+        case .ultraviolet:       return "Ultraviolet"
+        case .crimsonLab:        return "Crimson Lab"
+        case .forestConsole:     return "Forest Console"
+        case .copperPrint:       return "Copper Print"
+        case .polarIce:          return "Polar Ice"
         }
     }
 
     var palette: EditorThemePalette {
         switch self {
-        case .amberStudio:
-            return .amberStudio
-        case .resolveTeal:
-            return .resolveTeal
-        case .finalCutSapphire:
-            return .finalCutSapphire
+        case .amberStudio:       return .amberStudio
+        case .resolveTeal:       return .resolveTeal
+        case .finalCutSapphire:  return .finalCutSapphire
+        case .graphiteMono:      return .graphiteMono
+        case .ultraviolet:       return .ultraviolet
+        case .crimsonLab:        return .crimsonLab
+        case .forestConsole:     return .forestConsole
+        case .copperPrint:       return .copperPrint
+        case .polarIce:          return .polarIce
         }
     }
 }
 
+enum EditorThemeKind {
+    case dark
+    case light
+}
+
 struct EditorThemePalette: Equatable {
     let id: EditorThemeID
+    let kind: EditorThemeKind
+
+    // Surfaces
     let windowBackground: Color
     let canvasBackground: Color
     let panelBackground: Color
@@ -42,95 +62,342 @@ struct EditorThemePalette: Equatable {
     let trackBackground: Color
     let trackAlternateBackground: Color
     let thumbnailWell: Color
+
+    // Clip / accent
     let clipBlue: Color
     let clipBlueSelected: Color
+    let clipText: Color
     let accent: Color
     let accentText: Color
+    let danger: Color
+
+    // Text
     let primaryText: Color
     let secondaryText: Color
     let mutedText: Color
+
+    // Lines / grid
     let hairline: Color
+    let strongHairline: Color
+    let gridLine: Color
+
+    // Playback HUD overlays (rendered on top of media — kept dark regardless of theme).
     let playbackControlBackground: Color
     let playbackControlBorder: Color
     let playbackSecondaryText: Color
+
+    // Bridge for AppKit (NSWindow background, etc.)
     let windowBackgroundNSColor: NSColor
 
     var controlBackground: Color { playbackControlBackground }
     var controlBorder: Color { playbackControlBorder }
+}
 
+// MARK: - Hex helpers
+
+private extension Color {
+    /// Build a Color from a hex string like "#1B1A17" or "1B1A17".
+    static func hex(_ hex: String, opacity: Double = 1) -> Color {
+        let (r, g, b) = parseHex(hex)
+        return Color(red: r, green: g, blue: b, opacity: opacity)
+    }
+
+    /// `rgba(255,255,255,.62)` style — alpha as a percentage of white/black/etc.
+    static func rgba(_ red: Int, _ green: Int, _ blue: Int, _ alpha: Double) -> Color {
+        Color(red: Double(red) / 255, green: Double(green) / 255, blue: Double(blue) / 255, opacity: alpha)
+    }
+}
+
+private extension NSColor {
+    static func hex(_ hex: String) -> NSColor {
+        let (r, g, b) = parseHex(hex)
+        return NSColor(red: r, green: g, blue: b, alpha: 1)
+    }
+}
+
+private func parseHex(_ raw: String) -> (Double, Double, Double) {
+    var s = raw
+    if s.hasPrefix("#") { s.removeFirst() }
+    guard s.count == 6, let v = UInt32(s, radix: 16) else {
+        return (0, 0, 0)
+    }
+    let r = Double((v >> 16) & 0xFF) / 255
+    let g = Double((v >> 8) & 0xFF) / 255
+    let b = Double(v & 0xFF) / 255
+    return (r, g, b)
+}
+
+// MARK: - Palettes
+
+extension EditorThemePalette {
     static let amberStudio = EditorThemePalette(
         id: .amberStudio,
-        windowBackground: Color(red: 0.140, green: 0.138, blue: 0.126),
-        canvasBackground: Color(red: 0.071, green: 0.077, blue: 0.086),
-        panelBackground: Color(red: 0.095, green: 0.101, blue: 0.111),
-        panelRaised: Color(red: 0.128, green: 0.132, blue: 0.145),
-        toolbarBackground: Color(red: 0.124, green: 0.128, blue: 0.142),
-        timelineBackground: Color(red: 0.068, green: 0.073, blue: 0.082),
-        trackBackground: Color(red: 0.076, green: 0.081, blue: 0.090),
-        trackAlternateBackground: Color(red: 0.112, green: 0.116, blue: 0.128),
-        thumbnailWell: Color.black.opacity(0.74),
-        clipBlue: Color(red: 0.350, green: 0.615, blue: 0.745),
-        clipBlueSelected: Color(red: 0.405, green: 0.690, blue: 0.815),
-        accent: Color(red: 0.957, green: 0.737, blue: 0.157),
-        accentText: Color(red: 0.075, green: 0.065, blue: 0.040),
-        primaryText: Color.white.opacity(0.92),
-        secondaryText: Color.white.opacity(0.58),
-        mutedText: Color.white.opacity(0.38),
-        hairline: Color.white.opacity(0.085),
-        playbackControlBackground: Color.black.opacity(0.70),
-        playbackControlBorder: Color.white.opacity(0.12),
-        playbackSecondaryText: Color.white.opacity(0.66),
-        windowBackgroundNSColor: NSColor(red: 0.140, green: 0.138, blue: 0.126, alpha: 1)
+        kind: .dark,
+        windowBackground:   .hex("#1B1A17"),
+        canvasBackground:   .hex("#0E0F11"),
+        panelBackground:    .hex("#15171B"),
+        panelRaised:        .hex("#1F2126"),
+        toolbarBackground:  .hex("#1B1D22"),
+        timelineBackground: .hex("#101216"),
+        trackBackground:    .hex("#13161B"),
+        trackAlternateBackground: .hex("#1B1E24"),
+        thumbnailWell:      .black,
+        clipBlue:           .hex("#5C9EC0"),
+        clipBlueSelected:   .hex("#67B0D0"),
+        clipText:           .hex("#0C1D2A"),
+        accent:             .hex("#F4BC28"),
+        accentText:         .hex("#1A1408"),
+        danger:             .hex("#E5484D"),
+        primaryText:        .rgba(255, 255, 255, 0.94),
+        secondaryText:      .rgba(255, 255, 255, 0.62),
+        mutedText:          .rgba(255, 255, 255, 0.42),
+        hairline:           .rgba(255, 255, 255, 0.07),
+        strongHairline:     .rgba(255, 255, 255, 0.13),
+        gridLine:           .rgba(255, 255, 255, 0.04),
+        playbackControlBackground: .black.opacity(0.70),
+        playbackControlBorder:     .white.opacity(0.12),
+        playbackSecondaryText:     .white.opacity(0.66),
+        windowBackgroundNSColor:   .hex("#1B1A17")
     )
 
     static let resolveTeal = EditorThemePalette(
         id: .resolveTeal,
-        windowBackground: Color(red: 0.137, green: 0.139, blue: 0.129),
-        canvasBackground: Color(red: 0.029, green: 0.055, blue: 0.054),
-        panelBackground: Color(red: 0.037, green: 0.070, blue: 0.069),
-        panelRaised: Color(red: 0.060, green: 0.105, blue: 0.103),
-        toolbarBackground: Color(red: 0.054, green: 0.092, blue: 0.089),
-        timelineBackground: Color(red: 0.020, green: 0.041, blue: 0.041),
-        trackBackground: Color(red: 0.026, green: 0.052, blue: 0.052),
-        trackAlternateBackground: Color(red: 0.055, green: 0.094, blue: 0.091),
-        thumbnailWell: Color.black.opacity(0.76),
-        clipBlue: Color(red: 0.345, green: 0.620, blue: 0.740),
-        clipBlueSelected: Color(red: 0.400, green: 0.705, blue: 0.800),
-        accent: Color(red: 0.094, green: 0.761, blue: 0.706),
-        accentText: Color(red: 0.015, green: 0.070, blue: 0.064),
-        primaryText: Color.white.opacity(0.93),
-        secondaryText: Color.white.opacity(0.58),
-        mutedText: Color.white.opacity(0.39),
-        hairline: Color.white.opacity(0.080),
-        playbackControlBackground: Color.black.opacity(0.70),
-        playbackControlBorder: Color.white.opacity(0.12),
-        playbackSecondaryText: Color.white.opacity(0.66),
-        windowBackgroundNSColor: NSColor(red: 0.137, green: 0.139, blue: 0.129, alpha: 1)
+        kind: .dark,
+        windowBackground:   .hex("#1A1A18"),
+        canvasBackground:   .hex("#08120F"),
+        panelBackground:    .hex("#0B1A17"),
+        panelRaised:        .hex("#0F2522"),
+        toolbarBackground:  .hex("#0E211E"),
+        timelineBackground: .hex("#070F0E"),
+        trackBackground:    .hex("#0A1714"),
+        trackAlternateBackground: .hex("#0F221F"),
+        thumbnailWell:      .black,
+        clipBlue:           .hex("#5DA1B9"),
+        clipBlueSelected:   .hex("#68B5CC"),
+        clipText:           .hex("#06181B"),
+        accent:             .hex("#18C2B4"),
+        accentText:         .hex("#03201D"),
+        danger:             .hex("#E5484D"),
+        primaryText:        .rgba(255, 255, 255, 0.94),
+        secondaryText:      .rgba(255, 255, 255, 0.62),
+        mutedText:          .rgba(255, 255, 255, 0.42),
+        hairline:           .rgba(255, 255, 255, 0.07),
+        strongHairline:     .rgba(255, 255, 255, 0.13),
+        gridLine:           .rgba(255, 255, 255, 0.04),
+        playbackControlBackground: .black.opacity(0.70),
+        playbackControlBorder:     .white.opacity(0.12),
+        playbackSecondaryText:     .white.opacity(0.66),
+        windowBackgroundNSColor:   .hex("#1A1A18")
     )
 
     static let finalCutSapphire = EditorThemePalette(
         id: .finalCutSapphire,
-        windowBackground: Color(red: 0.128, green: 0.131, blue: 0.125),
-        canvasBackground: Color(red: 0.024, green: 0.038, blue: 0.071),
-        panelBackground: Color(red: 0.036, green: 0.052, blue: 0.091),
-        panelRaised: Color(red: 0.064, green: 0.089, blue: 0.150),
-        toolbarBackground: Color(red: 0.065, green: 0.086, blue: 0.143),
-        timelineBackground: Color(red: 0.017, green: 0.029, blue: 0.055),
-        trackBackground: Color(red: 0.022, green: 0.035, blue: 0.065),
-        trackAlternateBackground: Color(red: 0.065, green: 0.086, blue: 0.143),
-        thumbnailWell: Color.black.opacity(0.76),
-        clipBlue: Color(red: 0.315, green: 0.600, blue: 0.735),
-        clipBlueSelected: Color(red: 0.260, green: 0.490, blue: 0.945),
-        accent: Color(red: 0.231, green: 0.510, blue: 0.965),
-        accentText: Color(red: 0.020, green: 0.035, blue: 0.070),
-        primaryText: Color.white.opacity(0.94),
-        secondaryText: Color.white.opacity(0.60),
-        mutedText: Color.white.opacity(0.40),
-        hairline: Color.white.opacity(0.085),
-        playbackControlBackground: Color.black.opacity(0.70),
-        playbackControlBorder: Color.white.opacity(0.12),
-        playbackSecondaryText: Color.white.opacity(0.66),
-        windowBackgroundNSColor: NSColor(red: 0.128, green: 0.131, blue: 0.125, alpha: 1)
+        kind: .dark,
+        windowBackground:   .hex("#161616"),
+        canvasBackground:   .hex("#070C1A"),
+        panelBackground:    .hex("#0B1226"),
+        panelRaised:        .hex("#11183A"),
+        toolbarBackground:  .hex("#101638"),
+        timelineBackground: .hex("#050A18"),
+        trackBackground:    .hex("#080F22"),
+        trackAlternateBackground: .hex("#0E1633"),
+        thumbnailWell:      .black,
+        clipBlue:           .hex("#5096C0"),
+        clipBlueSelected:   .hex("#4380F0"),
+        clipText:           .white,
+        accent:             .hex("#3B83F7"),
+        accentText:         .hex("#040820"),
+        danger:             .hex("#E5484D"),
+        primaryText:        .rgba(255, 255, 255, 0.95),
+        secondaryText:      .rgba(255, 255, 255, 0.62),
+        mutedText:          .rgba(255, 255, 255, 0.42),
+        hairline:           .rgba(255, 255, 255, 0.08),
+        strongHairline:     .rgba(255, 255, 255, 0.13),
+        gridLine:           .rgba(255, 255, 255, 0.045),
+        playbackControlBackground: .black.opacity(0.70),
+        playbackControlBorder:     .white.opacity(0.12),
+        playbackSecondaryText:     .white.opacity(0.66),
+        windowBackgroundNSColor:   .hex("#161616")
+    )
+
+    static let graphiteMono = EditorThemePalette(
+        id: .graphiteMono,
+        kind: .dark,
+        windowBackground:   .hex("#161616"),
+        canvasBackground:   .hex("#0C0C0C"),
+        panelBackground:    .hex("#121212"),
+        panelRaised:        .hex("#1A1A1A"),
+        toolbarBackground:  .hex("#161616"),
+        timelineBackground: .hex("#0A0A0A"),
+        trackBackground:    .hex("#101010"),
+        trackAlternateBackground: .hex("#181818"),
+        thumbnailWell:      .black,
+        clipBlue:           .hex("#6E6E6E"),
+        clipBlueSelected:   .hex("#9E9E9E"),
+        clipText:           .hex("#0A0A0A"),
+        accent:             .hex("#EAEAEA"),
+        accentText:         .hex("#0A0A0A"),
+        danger:             .hex("#E5484D"),
+        primaryText:        .rgba(255, 255, 255, 0.94),
+        secondaryText:      .rgba(255, 255, 255, 0.58),
+        mutedText:          .rgba(255, 255, 255, 0.38),
+        hairline:           .rgba(255, 255, 255, 0.07),
+        strongHairline:     .rgba(255, 255, 255, 0.13),
+        gridLine:           .rgba(255, 255, 255, 0.04),
+        playbackControlBackground: .black.opacity(0.70),
+        playbackControlBorder:     .white.opacity(0.12),
+        playbackSecondaryText:     .white.opacity(0.66),
+        windowBackgroundNSColor:   .hex("#161616")
+    )
+
+    static let ultraviolet = EditorThemePalette(
+        id: .ultraviolet,
+        kind: .dark,
+        windowBackground:   .hex("#15131B"),
+        canvasBackground:   .hex("#0A0716"),
+        panelBackground:    .hex("#100B1F"),
+        panelRaised:        .hex("#181230"),
+        toolbarBackground:  .hex("#15102A"),
+        timelineBackground: .hex("#080513"),
+        trackBackground:    .hex("#0C081C"),
+        trackAlternateBackground: .hex("#150F2C"),
+        thumbnailWell:      .black,
+        clipBlue:           .hex("#7E63B2"),
+        clipBlueSelected:   .hex("#A079D6"),
+        clipText:           .hex("#0D0820"),
+        accent:             .hex("#A06BFF"),
+        accentText:         .hex("#150A28"),
+        danger:             .hex("#E5484D"),
+        primaryText:        .rgba(255, 255, 255, 0.94),
+        secondaryText:      .rgba(255, 255, 255, 0.62),
+        mutedText:          .rgba(255, 255, 255, 0.42),
+        hairline:           .rgba(255, 255, 255, 0.08),
+        strongHairline:     .rgba(255, 255, 255, 0.14),
+        gridLine:           .rgba(255, 255, 255, 0.05),
+        playbackControlBackground: .black.opacity(0.70),
+        playbackControlBorder:     .white.opacity(0.12),
+        playbackSecondaryText:     .white.opacity(0.66),
+        windowBackgroundNSColor:   .hex("#15131B")
+    )
+
+    static let crimsonLab = EditorThemePalette(
+        id: .crimsonLab,
+        kind: .dark,
+        windowBackground:   .hex("#181312"),
+        canvasBackground:   .hex("#100806"),
+        panelBackground:    .hex("#170D0C"),
+        panelRaised:        .hex("#22110F"),
+        toolbarBackground:  .hex("#1E0F0D"),
+        timelineBackground: .hex("#0D0605"),
+        trackBackground:    .hex("#13080A"),
+        trackAlternateBackground: .hex("#1D0F11"),
+        thumbnailWell:      .black,
+        clipBlue:           .hex("#A36868"),
+        clipBlueSelected:   .hex("#D77979"),
+        clipText:           .hex("#1C0707"),
+        accent:             .hex("#FF5A5F"),
+        accentText:         .hex("#1F0707"),
+        danger:             .hex("#E5484D"),
+        primaryText:        .rgba(255, 255, 255, 0.94),
+        secondaryText:      .rgba(255, 255, 255, 0.62),
+        mutedText:          .rgba(255, 255, 255, 0.42),
+        hairline:           .rgba(255, 255, 255, 0.08),
+        strongHairline:     .rgba(255, 255, 255, 0.14),
+        gridLine:           .rgba(255, 255, 255, 0.04),
+        playbackControlBackground: .black.opacity(0.70),
+        playbackControlBorder:     .white.opacity(0.12),
+        playbackSecondaryText:     .white.opacity(0.66),
+        windowBackgroundNSColor:   .hex("#181312")
+    )
+
+    static let forestConsole = EditorThemePalette(
+        id: .forestConsole,
+        kind: .dark,
+        windowBackground:   .hex("#13181A"),
+        canvasBackground:   .hex("#08110B"),
+        panelBackground:    .hex("#0D1A11"),
+        panelRaised:        .hex("#132518"),
+        toolbarBackground:  .hex("#112116"),
+        timelineBackground: .hex("#060E08"),
+        trackBackground:    .hex("#0A1610"),
+        trackAlternateBackground: .hex("#102218"),
+        thumbnailWell:      .black,
+        clipBlue:           .hex("#67A26E"),
+        clipBlueSelected:   .hex("#7DBC85"),
+        clipText:           .hex("#08180C"),
+        accent:             .hex("#7CD64E"),
+        accentText:         .hex("#0A1F08"),
+        danger:             .hex("#E5484D"),
+        primaryText:        .rgba(255, 255, 255, 0.93),
+        secondaryText:      .rgba(255, 255, 255, 0.60),
+        mutedText:          .rgba(255, 255, 255, 0.40),
+        hairline:           .rgba(255, 255, 255, 0.07),
+        strongHairline:     .rgba(255, 255, 255, 0.13),
+        gridLine:           .rgba(255, 255, 255, 0.04),
+        playbackControlBackground: .black.opacity(0.70),
+        playbackControlBorder:     .white.opacity(0.12),
+        playbackSecondaryText:     .white.opacity(0.66),
+        windowBackgroundNSColor:   .hex("#13181A")
+    )
+
+    static let copperPrint = EditorThemePalette(
+        id: .copperPrint,
+        kind: .dark,
+        windowBackground:   .hex("#1A1612"),
+        canvasBackground:   .hex("#100B07"),
+        panelBackground:    .hex("#171008"),
+        panelRaised:        .hex("#22180F"),
+        toolbarBackground:  .hex("#1F160D"),
+        timelineBackground: .hex("#0E0905"),
+        trackBackground:    .hex("#140D08"),
+        trackAlternateBackground: .hex("#1D140C"),
+        thumbnailWell:      .black,
+        clipBlue:           .hex("#A4814F"),
+        clipBlueSelected:   .hex("#C29761"),
+        clipText:           .hex("#1A0F05"),
+        accent:             .hex("#E07A3D"),
+        accentText:         .hex("#1A0A04"),
+        danger:             .hex("#E5484D"),
+        primaryText:        .rgba(255, 255, 255, 0.93),
+        secondaryText:      .rgba(255, 255, 255, 0.60),
+        mutedText:          .rgba(255, 255, 255, 0.40),
+        hairline:           .rgba(255, 255, 255, 0.07),
+        strongHairline:     .rgba(255, 255, 255, 0.13),
+        gridLine:           .rgba(255, 255, 255, 0.04),
+        playbackControlBackground: .black.opacity(0.70),
+        playbackControlBorder:     .white.opacity(0.12),
+        playbackSecondaryText:     .white.opacity(0.66),
+        windowBackgroundNSColor:   .hex("#1A1612")
+    )
+
+    static let polarIce = EditorThemePalette(
+        id: .polarIce,
+        kind: .light,
+        windowBackground:   .hex("#E6EBF1"),
+        canvasBackground:   .hex("#F5F7FA"),
+        panelBackground:    .hex("#FBFCFD"),
+        panelRaised:        .hex("#FFFFFF"),
+        toolbarBackground:  .hex("#F0F3F7"),
+        timelineBackground: .hex("#EDF1F5"),
+        trackBackground:    .hex("#E5EAF0"),
+        trackAlternateBackground: .hex("#F1F4F8"),
+        thumbnailWell:      .hex("#0F1620"),
+        clipBlue:           .hex("#7AA8C7"),
+        clipBlueSelected:   .hex("#5B95C0"),
+        clipText:           .white,
+        accent:             .hex("#0058D4"),
+        accentText:         .white,
+        danger:             .hex("#D11C2A"),
+        primaryText:        .rgba(15, 22, 32, 0.94),
+        secondaryText:      .rgba(15, 22, 32, 0.62),
+        mutedText:          .rgba(15, 22, 32, 0.42),
+        hairline:           .rgba(15, 22, 32, 0.10),
+        strongHairline:     .rgba(15, 22, 32, 0.18),
+        gridLine:           .rgba(15, 22, 32, 0.05),
+        playbackControlBackground: .black.opacity(0.70),
+        playbackControlBorder:     .white.opacity(0.12),
+        playbackSecondaryText:     .white.opacity(0.66),
+        windowBackgroundNSColor:   .hex("#E6EBF1")
     )
 }
 
