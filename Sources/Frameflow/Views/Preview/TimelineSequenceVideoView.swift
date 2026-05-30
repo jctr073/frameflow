@@ -157,6 +157,22 @@ private struct TimelineSequenceVideoControls: View {
                 .lineLimit(1)
                 .quickTooltip("Timeline Duration", placement: .above)
                 .accessibilityLabel("Timeline Duration")
+
+            Rectangle()
+                .fill(theme.hairline)
+                .frame(width: 1, height: 16)
+                .padding(.horizontal, 2)
+
+            Toggle(isOn: $controller.loop) {
+                Text("Loop")
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .toggleStyle(.checkbox)
+            .controlSize(.small)
+            .foregroundStyle(theme.secondaryText)
+            .fixedSize()
+            .quickTooltip("Loop Playback", placement: .above)
+            .accessibilityLabel("Loop Playback")
         }
         .frame(height: 28)
         .padding(.horizontal, 10)
@@ -171,12 +187,19 @@ private struct TimelineSequenceVideoControls: View {
 
 @MainActor
 private final class TimelineSequenceVideoController: ObservableObject {
+    static let loopDefaultsKey = "videoPlayerLoop"
+
     let player = AVPlayer()
 
     @Published var currentTime: TimeInterval = 0
     @Published var duration: TimeInterval = 0
     @Published var isPlaying = false
     @Published var isLoading = false
+    @Published var loop: Bool = UserDefaults.standard.object(forKey: TimelineSequenceVideoController.loopDefaultsKey) as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(loop, forKey: TimelineSequenceVideoController.loopDefaultsKey)
+        }
+    }
     @Published var position = TimelinePlaybackPosition(timelineTime: 0, clipID: nil, sourceTime: 0)
 
     private var clips: [TimelinePlaybackClip] = []
@@ -363,8 +386,13 @@ private final class TimelineSequenceVideoController: ObservableObject {
         ) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
-                self.updatePosition(to: self.duration)
-                self.player.pause()
+                if self.loop {
+                    self.seek(to: 0)
+                    self.player.play()
+                } else {
+                    self.updatePosition(to: self.duration)
+                    self.player.pause()
+                }
             }
         }
     }
