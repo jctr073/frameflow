@@ -90,6 +90,7 @@ The install script uses `sudo` only when `/Applications` is not writable by the 
 
 - `Command-O`: open a folder.
 - `Space`: toggle playback when focus is not in a text field.
+- `Loop` checkbox in the player controls: replay video from the start when it reaches the end (on by default).
 - `Return`: apply an active crop, trim, or adjustment crop keyframe.
 - `Escape`: clear an active crop or trim.
 - Arrow keys: nudge an active adjustment crop in Composer.

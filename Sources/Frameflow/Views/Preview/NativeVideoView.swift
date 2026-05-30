@@ -124,6 +124,22 @@ private struct NativeVideoControls: View {
                 .lineLimit(1)
                 .quickTooltip("Video End Time", placement: .above)
                 .accessibilityLabel("Video End Time")
+
+            Rectangle()
+                .fill(theme.hairline)
+                .frame(width: 1, height: 16)
+                .padding(.horizontal, 2)
+
+            Toggle(isOn: $controller.loop) {
+                Text("Loop")
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .toggleStyle(.checkbox)
+            .controlSize(.small)
+            .foregroundStyle(theme.secondaryText)
+            .fixedSize()
+            .quickTooltip("Loop Playback", placement: .above)
+            .accessibilityLabel("Loop Playback")
         }
         .frame(height: 28)
         .padding(.horizontal, 10)
@@ -138,11 +154,18 @@ private struct NativeVideoControls: View {
 
 @MainActor
 private final class NativeVideoController: ObservableObject {
+    static let loopDefaultsKey = "videoPlayerLoop"
+
     let player = AVPlayer()
 
     @Published var currentTime: TimeInterval = 0
     @Published var duration: TimeInterval = 0
     @Published var isPlaying = false
+    @Published var loop: Bool = UserDefaults.standard.object(forKey: NativeVideoController.loopDefaultsKey) as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(loop, forKey: NativeVideoController.loopDefaultsKey)
+        }
+    }
 
     private var url: URL?
     private var crop = NormalizedCrop.full
@@ -383,8 +406,13 @@ private final class NativeVideoController: ObservableObject {
         boundaryObserver = player.addBoundaryTimeObserver(forTimes: [NSValue(time: endTime)], queue: .main) { [weak self] in
             guard let self else { return }
             Task { @MainActor in
-                self.currentTime = end
-                self.player.pause()
+                if self.loop {
+                    self.seek(to: self.playbackStart)
+                    self.player.play()
+                } else {
+                    self.currentTime = end
+                    self.player.pause()
+                }
             }
         }
     }
@@ -407,8 +435,13 @@ private final class NativeVideoController: ObservableObject {
         ) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
-                self.currentTime = self.playbackEnd
-                self.player.pause()
+                if self.loop {
+                    self.seek(to: self.playbackStart)
+                    self.player.play()
+                } else {
+                    self.currentTime = self.playbackEnd
+                    self.player.pause()
+                }
             }
         }
     }
